@@ -4,8 +4,18 @@ from pathlib import Path
 
 import flet as ft
 
+try:
+    import flet_camera as ft_camera
+except ImportError:
+    ft_camera = None
+
+try:
+    import flet_permission_handler as fph
+except ImportError:
+    fph = None
+
 from config import CULTURE_OPTIONS, WEB_IMAGE_BATCH_LIMIT, WEB_IMAGE_COMPRESSION_QUALITY
-from services.image_service import list_test_images, prepare_selected_images
+from services.image_service import list_test_images, prepare_selected_images, save_temp_image_bytes
 from state.app_state import ParcelImage
 
 
@@ -17,6 +27,12 @@ class SamplingView:
         self.on_state_change = on_state_change
         self.file_picker = ft.FilePicker()
         self.page.services.append(self.file_picker)
+        self.permission_handler = fph.PermissionHandler() if fph is not None else None
+        if self.permission_handler is not None:
+            self.page.services.append(self.permission_handler)
+        self.camera = None
+        self.camera_dialog = None
+        self.camera_status_text = None
 
         self.status_text = ft.Text("Selecione ou fotografe imagens da parcela.", color="#C9D1D9")
         self.selection_text = ft.Text("Nenhuma imagem adicionada.", color="#9AA4B2")
@@ -323,34 +339,114 @@ class SamplingView:
             self.page.update()
             return
 
-        self.status_text.value = "Nesta versao do app, o dispositivo abrira o seletor nativo de imagem."
+        if ft_camera is None:
+            self.status_text.value = "Suporte de camera nao instalado nesta versao do aplicativo."
+            self.page.update()
+            return
+
+        if self.permission_handler is None:
+            self.status_text.value = "Servico de permissao nao esta disponivel nesta versao do aplicativo."
+            self.page.update()
+            return
+
+        permission_status = await self.permission_handler.get_status(fph.Permission.CAMERA)
+        if permission_status != fph.PermissionStatus.GRANTED:
+            permission_status = await self.permission_handler.request(fph.Permission.CAMERA)
+
+        if permission_status != fph.PermissionStatus.GRANTED:
+            self.status_text.value = "Permissao de camera negada. Libere a camera para fotografar a parcela."
+            self.page.update()
+            return
+
+        await self._open_camera_dialog()
+
+    async def _open_camera_dialog(self):
+        self.camera_status_text = ft.Text("Inicializando camera...", color="#C9D1D9", text_align=ft.TextAlign.CENTER)
+        self.camera = ft_camera.Camera(
+            expand=True,
+            preview_enabled=True,
+        )
+
+        def close_dialog(_=None):
+            self.camera = None
+            self.camera_status_text = None
+            self.page.pop_dialog()
+            self.page.update()
+
+        self.camera_dialog = ft.AlertDialog(
+            modal=True,
+            bgcolor="#111827",
+            title=ft.Text("Fotografar Parcela", color="white"),
+            content=ft.Container(
+                width=320,
+                height=420,
+                content=ft.Column(
+                    tight=True,
+                    controls=[
+                        ft.Container(
+                            expand=True,
+                            border_radius=16,
+                            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                            bgcolor="#020617",
+                            content=self.camera,
+                        ),
+                        self.camera_status_text,
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Cancelar", on_click=close_dialog),
+                ft.FilledButton("Capturar", icon=ft.Icons.CAMERA_ALT_ROUNDED, on_click=self._take_camera_picture),
+            ],
+        )
+        self.page.show_dialog(self.camera_dialog)
         self.page.update()
 
         try:
-            files = await self.file_picker.pick_files(
-                allow_multiple=False,
-                file_type=ft.FilePickerFileType.IMAGE,
-                with_data=self.page.web,
-                compression_quality=WEB_IMAGE_COMPRESSION_QUALITY if self.page.web else 0,
+            cameras = await self.camera.get_available_cameras()
+            if not cameras:
+                raise RuntimeError("Nenhuma camera disponivel no dispositivo.")
+            selected_camera = next(
+                (
+                    item
+                    for item in cameras
+                    if item.lens_direction == ft_camera.CameraLensDirection.BACK
+                ),
+                cameras[0],
             )
-        except RuntimeError as exc:
-            self.status_text.value = f"Erro ao abrir seletor de imagem: {exc}"
-            self.page.update()
+            await self.camera.initialize(
+                description=selected_camera,
+                resolution_preset=ft_camera.ResolutionPreset.HIGH,
+                enable_audio=False,
+            )
+            self.camera_status_text.value = "Camera traseira pronta."
+        except Exception as exc:
+            self.camera_status_text.value = f"Erro ao iniciar camera: {exc}"
+        self.page.update()
+
+    async def _take_camera_picture(self, _):
+        parcel = self.app_state.get_active_parcel()
+        if parcel is None or self.camera is None:
             return
 
-        if not files:
+        try:
+            image_bytes = await self.camera.take_picture()
+            target_path = save_temp_image_bytes(
+                file_bytes=image_bytes,
+                file_name=f"camera_{len(parcel.images) + 1}.jpg",
+                index=len(parcel.images),
+            )
+        except Exception as exc:
+            if self.camera_status_text is not None:
+                self.camera_status_text.value = f"Erro ao capturar imagem: {exc}"
+                self.page.update()
             return
 
-        paths = prepare_selected_images(files[:1], optimize_for_web=self.page.web)
-        if not paths:
-            self.status_text.value = "Nao foi possivel carregar a imagem."
-            self.page.update()
-            return
-
-        for path in paths:
-            parcel.images.append(ParcelImage(id=uuid.uuid4().hex, path=str(path)))
-
+        parcel.images.append(ParcelImage(id=uuid.uuid4().hex, path=str(target_path)))
         self.status_text.value = f"{len(parcel.images)}/{parcel.target_images} imagens carregadas."
+        self.camera = None
+        self.camera_status_text = None
+        self.page.pop_dialog()
         self._request_refresh()
 
     def _load_test_images(self, _):

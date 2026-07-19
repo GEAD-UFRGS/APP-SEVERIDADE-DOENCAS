@@ -1,4 +1,6 @@
 flet==0.86.1
+flet-camera==0.86.1
+flet-permission-handler==0.86.1
 certifi>=2026.6.17
 numpy>=2.1.1,<2.5
 onnxruntime>=1.19,<1.28

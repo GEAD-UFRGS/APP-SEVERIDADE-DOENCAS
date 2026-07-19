@@ -5,6 +5,8 @@ description = "Aplicativo Flet para validacao de segmentacao com ATTUNet ONNX"
 requires-python = ">=3.10"
 dependencies = [
     "flet==0.86.1",
+    "flet-camera==0.86.1",
+    "flet-permission-handler==0.86.1",
     "certifi>=2026.6.17",
     "numpy>=2.1.1,<2.5",
     "onnxruntime>=1.19,<1.28",
@@ -16,12 +18,13 @@ dependencies = [
 org = "com.attunet.mobile"
 product = "ATTUNet Mobile"
 company = "attunet"
-permissions = ["photo_library"]
+permissions = ["photo_library", "camera"]
 
 [tool.flet.app]
 module = "main"
 
 [tool.flet.android.permission]
+"android.permission.CAMERA" = true
 "android.permission.READ_MEDIA_IMAGES" = true
 "android.permission.READ_MEDIA_VISUAL_USER_SELECTED" = true
 "android.permission.READ_EXTERNAL_STORAGE" = { maxSdkVersion = "32" }
@@ -30,4 +33,5 @@ module = "main"
 target_arch = ["arm64-v8a"]
 
 [tool.flet.ios.info]
+NSCameraUsageDescription = "Este aplicativo usa a camera traseira para fotografar as parcelas."
 NSPhotoLibraryUsageDescription = "Este aplicativo acessa a galeria para selecionar imagens das parcelas."
