@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Local app state and temporary data
+.flet/
+attunet_mobile/state/temp_images/
+attunet_mobile/state/settings.json
+attunet_mobile/state/saved_parcels.json
+
+# Build artifacts
+build/
+dist/
+site/
+attunet_mobile/build/
+
+# Logs
+*.log

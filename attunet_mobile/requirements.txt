@@ -1,0 +1,6 @@
+flet==0.86.1
+certifi>=2026.6.17
+numpy>=2.1.1,<2.5
+onnxruntime>=1.19,<1.28
+opencv-python-headless>=4.10,<5.1
+Pillow>=12.2.0,<13

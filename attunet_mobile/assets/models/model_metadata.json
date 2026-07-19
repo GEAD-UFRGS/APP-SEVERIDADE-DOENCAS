@@ -1,0 +1,9 @@
+{
+  "model_file": "attunet.onnx",
+  "input_name": "input",
+  "output_name": "output",
+  "input_width": 512,
+  "input_height": 512,
+  "threshold": 0.6,
+  "apply_sigmoid": true
+}

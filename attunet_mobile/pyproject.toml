@@ -1,0 +1,33 @@
+[project]
+name = "attunet-mobile"
+version = "0.1.0"
+description = "Aplicativo Flet para validacao de segmentacao com ATTUNet ONNX"
+requires-python = ">=3.10"
+dependencies = [
+    "flet==0.86.1",
+    "certifi>=2026.6.17",
+    "numpy>=2.1.1,<2.5",
+    "onnxruntime>=1.19,<1.28",
+    "opencv-python-headless>=4.10,<5.1",
+    "Pillow>=12.2.0,<13",
+]
+
+[tool.flet]
+org = "com.attunet.mobile"
+product = "ATTUNet Mobile"
+company = "attunet"
+permissions = ["photo_library"]
+
+[tool.flet.app]
+module = "main"
+
+[tool.flet.android.permission]
+"android.permission.READ_MEDIA_IMAGES" = true
+"android.permission.READ_MEDIA_VISUAL_USER_SELECTED" = true
+"android.permission.READ_EXTERNAL_STORAGE" = { maxSdkVersion = "32" }
+
+[tool.flet.android]
+target_arch = ["arm64-v8a"]
+
+[tool.flet.ios.info]
+NSPhotoLibraryUsageDescription = "Este aplicativo acessa a galeria para selecionar imagens das parcelas."
