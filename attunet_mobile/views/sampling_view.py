@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import flet as ft
@@ -27,19 +27,28 @@ class SamplingView:
         self.on_state_change = on_state_change
         self.file_picker = ft.FilePicker()
         self.page.services.append(self.file_picker)
-        self.permission_handler = fph.PermissionHandler() if fph is not None else None
+        self.permission_handler = None
+        if fph is not None and self._permission_handler_supported():
+            self.permission_handler = fph.PermissionHandler()
         if self.permission_handler is not None:
             self.page.services.append(self.permission_handler)
         self.camera = None
         self.camera_dialog = None
         self.camera_status_text = None
+        self.viewer_token = None
+        self.viewer_session_key = uuid.uuid4().hex
 
-        self.status_text = ft.Text("Selecione ou fotografe imagens da parcela.", color="#C9D1D9")
-        self.selection_text = ft.Text("Nenhuma imagem adicionada.", color="#9AA4B2")
+        self.feedback_text = ft.Text(
+            "Faltam imagens para completar a parcela.",
+            color="#94A3B8",
+            size=13,
+            text_align=ft.TextAlign.CENTER,
+        )
+        self.status_text = self.feedback_text
+        self.selection_text = self.feedback_text
         self.progress_bar = ft.ProgressBar(value=0, color="#0B6E1B", bgcolor="#334155", visible=False)
         self.process_button = ft.FilledButton(
             "Processar Parcela",
-            icon=ft.Icons.AUTO_FIX_HIGH_ROUNDED,
             on_click=self._process_parcel,
             height=54,
             width=354,
@@ -53,7 +62,7 @@ class SamplingView:
         )
         self.view_mode_dropdown = ft.Dropdown(
             width=322,
-            value="sobreposicao",
+            value="mapa",
             label="Modo de visualizacao",
             options=[
                 ft.dropdown.Option("original", "Original"),
@@ -66,20 +75,45 @@ class SamplingView:
             border_color="#334155",
             color="white",
         )
-        self.current_healthy_text = ft.Text("--", color="#86EFAC", size=18, weight=ft.FontWeight.W_700)
-        self.current_severity_text = ft.Text("--", color="#FDBA74", size=18, weight=ft.FontWeight.W_700)
-        self.avg_healthy_text = ft.Text("--", color="#86EFAC", size=18, weight=ft.FontWeight.W_700)
-        self.avg_severity_text = ft.Text("--", color="#FDBA74", size=18, weight=ft.FontWeight.W_700)
+        self.current_healthy_text = ft.Text(
+            "--",
+            color="#86EFAC",
+            size=28,
+            weight=ft.FontWeight.W_700,
+            text_align=ft.TextAlign.CENTER,
+        )
+        self.current_severity_text = ft.Text(
+            "--",
+            color="#FDBA74",
+            size=28,
+            weight=ft.FontWeight.W_700,
+            text_align=ft.TextAlign.CENTER,
+        )
+        self.avg_healthy_text = ft.Text(
+            "--",
+            color="#D1FAE5",
+            size=14,
+            weight=ft.FontWeight.W_600,
+            text_align=ft.TextAlign.CENTER,
+        )
+        self.avg_severity_text = ft.Text(
+            "--",
+            color="#FFEDD5",
+            size=14,
+            weight=ft.FontWeight.W_600,
+            text_align=ft.TextAlign.CENTER,
+        )
         self.segmented_image = ft.Image(
             src="",
-            width=320,
-            height=320,
+            width=322,
+            height=322,
             fit="contain",
             border_radius=16,
             visible=False,
         )
         self.placeholder = ft.Container(
-            height=320,
+            width=322,
+            height=322,
             border_radius=16,
             bgcolor="#1F2937",
             alignment=ft.Alignment.CENTER,
@@ -89,6 +123,15 @@ class SamplingView:
                 size=15,
                 text_align=ft.TextAlign.CENTER,
             ),
+        )
+        self.viewer_stack = ft.Stack(
+            width=322,
+            height=322,
+            fit=ft.StackFit.EXPAND,
+            controls=[
+                self.placeholder,
+                self.segmented_image,
+            ],
         )
 
     def build(self):
@@ -163,7 +206,7 @@ class SamplingView:
             ),
         ]
 
-        if not self.page.web:
+        if self._camera_capture_supported():
             action_controls.append(
                 self._action_card(
                     icon=ft.Icons.PHOTO_CAMERA_ROUNDED,
@@ -208,7 +251,7 @@ class SamplingView:
                                 controls=[
                                     ft.Text(parcel.name, size=22, weight=ft.FontWeight.W_700, color="white"),
                                     ft.Text(
-                                        f"{parcel.culture} | {parcel.date} | alvo: {parcel.target_images} imagens",
+                                        f"{parcel.culture} | {self._format_parcel_date(parcel.date)} | alvo: {parcel.target_images} imagens",
                                         color="#AAB2BF",
                                         size=14,
                                     ),
@@ -218,19 +261,12 @@ class SamplingView:
                     ),
                     ft.Text(parcel.description or "Sem descricao adicional.", size=14, color="#94A3B8"),
                     *action_controls,
+                    self._feedback_line(),
                     self.process_button,
                     self.progress_bar,
-                    self._status_card(),
                     self._viewer_card(),
                     self._metrics_card(),
                     self._view_mode_card(),
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        controls=[
-                            ft.FilledButton("Anterior", icon=ft.Icons.ARROW_BACK, on_click=self._previous_image),
-                            ft.FilledButton("Proxima", icon=ft.Icons.ARROW_FORWARD, on_click=self._next_image),
-                        ],
-                    ),
                     self.save_button,
                 ],
                 spacing=16,
@@ -240,11 +276,13 @@ class SamplingView:
     def _refresh_detail(self, parcel):
         current = parcel.current_image()
         image_count = len(parcel.images)
+        remaining = max(parcel.target_images - image_count, 0)
+        self.feedback_text.color = "#94A3B8"
         self.process_button.disabled = not parcel.is_ready_to_process()
         self.save_button.disabled = not any(image.processed for image in parcel.images)
 
         if image_count == 0:
-            self.selection_text.value = f"0/{parcel.target_images} imagens carregadas."
+            self.selection_text.value = f"Faltam {parcel.target_images} imagens para completar a parcela."
             self.segmented_image.visible = False
             self.placeholder.visible = True
             self.placeholder.content.value = "Adicione imagens da parcela para iniciar o processamento."
@@ -253,20 +291,24 @@ class SamplingView:
             self.current_severity_text.value = "--"
             self.avg_healthy_text.value = "--"
             self.avg_severity_text.value = "--"
+            self._sync_viewer_session(None)
             return
 
-        self.selection_text.value = (
-            f"{parcel.current_index + 1}/{image_count} imagens da parcela"
-            f" | alvo {parcel.target_images}"
-        )
+        if remaining > 0:
+            plural = "imagem" if remaining == 1 else "imagens"
+            self.selection_text.value = f"Faltam {remaining} {plural} para completar a parcela."
+        else:
+            self.selection_text.value = "Parcela completa. Use pinca para zoom e dois toques laterais para trocar a imagem."
         self.view_mode_dropdown.disabled = False
         self.avg_healthy_text.value = f"{parcel.average_healthy_pct():.2f}%"
         self.avg_severity_text.value = f"{parcel.average_severity_pct():.2f}%"
 
         if current is None:
+            self._sync_viewer_session(None)
             return
 
-        self.view_mode_dropdown.value = current.view_mode
+        self._sync_viewer_session(current)
+        self.view_mode_dropdown.value = current.view_mode or self._active_view_mode()
         if current.has_visualization and current.view_sources.get(current.view_mode):
             self.segmented_image.src = current.view_sources[current.view_mode]
             self.segmented_image.visible = True
@@ -324,7 +366,13 @@ class SamplingView:
             return
 
         for path in paths:
-            parcel.images.append(ParcelImage(id=uuid.uuid4().hex, path=str(path)))
+            parcel.images.append(
+                ParcelImage(
+                    id=uuid.uuid4().hex,
+                    path=str(path),
+                    view_mode=self._active_view_mode(),
+                )
+            )
 
         self.status_text.value = f"{len(parcel.images)}/{parcel.target_images} imagens carregadas."
         self._request_refresh()
@@ -442,7 +490,13 @@ class SamplingView:
                 self.page.update()
             return
 
-        parcel.images.append(ParcelImage(id=uuid.uuid4().hex, path=str(target_path)))
+        parcel.images.append(
+            ParcelImage(
+                id=uuid.uuid4().hex,
+                path=str(target_path),
+                view_mode=self._active_view_mode(),
+            )
+        )
         self.status_text.value = f"{len(parcel.images)}/{parcel.target_images} imagens carregadas."
         self.camera = None
         self.camera_status_text = None
@@ -461,7 +515,13 @@ class SamplingView:
 
         paths = list_test_images()[:remaining]
         for path in paths:
-            parcel.images.append(ParcelImage(id=uuid.uuid4().hex, path=str(path)))
+            parcel.images.append(
+                ParcelImage(
+                    id=uuid.uuid4().hex,
+                    path=str(path),
+                    view_mode=self._active_view_mode(),
+                )
+            )
         self.status_text.value = f"{len(parcel.images)}/{parcel.target_images} imagens carregadas."
         self._request_refresh()
 
@@ -510,6 +570,8 @@ class SamplingView:
         if parcel is None:
             return
         self.app_state.save_parcel(parcel.id)
+        self.feedback_text.value = "Parcela salva com sucesso."
+        self.feedback_text.color = "#86EFAC"
         self.status_text.value = "Parcela salva. Ao reabrir, apenas os resultados percentuais serao mantidos."
         self.page.update()
 
@@ -518,6 +580,7 @@ class SamplingView:
         if parcel is None:
             return
         parcel.previous_image()
+        self._reset_viewer_state()
         self._request_refresh()
 
     def _next_image(self, _):
@@ -525,22 +588,23 @@ class SamplingView:
         if parcel is None:
             return
         parcel.next_image()
+        self._reset_viewer_state()
         self._request_refresh()
 
     def _change_view_mode(self, event):
         parcel = self.app_state.get_active_parcel()
         if parcel is None:
             return
-        current = parcel.current_image()
-        if current is None:
-            return
-        current.view_mode = event.control.value or current.view_mode
+        selected_mode = event.control.value or "mapa"
+        self.view_mode_dropdown.value = selected_mode
+        self._apply_view_mode_to_parcel(parcel, selected_mode)
+        self._reset_viewer_state()
         self._request_refresh()
 
     def _open_add_parcel_dialog(self, _):
         name_field = ft.TextField(label="Nome da parcela", autofocus=True)
         target_field = ft.TextField(label="Quantidade alvo de imagens", value="3", keyboard_type=ft.KeyboardType.NUMBER)
-        date_field = ft.TextField(label="Data", value=str(date.today()))
+        date_field = ft.TextField(label="Data", value=date.today().strftime("%d/%m/%Y"))
         culture_dropdown = ft.Dropdown(
             label="Cultura",
             value=CULTURE_OPTIONS[0],
@@ -569,11 +633,16 @@ class SamplingView:
                 feedback_text.value = "A quantidade alvo deve ser maior que zero."
                 self.page.update()
                 return
+            formatted_date = self._normalize_parcel_date(date_field.value)
+            if formatted_date is None:
+                feedback_text.value = "Informe a data no formato DD/MM/AAAA."
+                self.page.update()
+                return
 
             parcel = self.app_state.add_parcel(
                 name=name_field.value.strip(),
                 target_images=target_images,
-                date=date_field.value.strip(),
+                date=formatted_date,
                 culture=culture_dropdown.value or CULTURE_OPTIONS[0],
                 description=description_field.value.strip(),
             )
@@ -605,10 +674,18 @@ class SamplingView:
 
     def _back_to_list(self, _):
         self.app_state.close_parcel()
+        self.viewer_token = None
+        self._reset_viewer_state()
         self._request_refresh()
 
     def _open_parcel(self, parcel_id: str):
         self.app_state.open_parcel(parcel_id)
+        self.view_mode_dropdown.value = "mapa"
+        parcel = self.app_state.get_active_parcel()
+        if parcel is not None:
+            self._apply_view_mode_to_parcel(parcel, "mapa")
+        self.viewer_token = None
+        self._reset_viewer_state()
         self._request_refresh()
 
     def _delete_parcel(self, parcel_id: str):
@@ -639,12 +716,12 @@ class SamplingView:
                         controls=[
                             ft.Text(parcel.name, color="white", size=20, weight=ft.FontWeight.W_700),
                             ft.Text(
-                                f"{parcel.culture} | {parcel.date}",
+                                f"{parcel.culture} | {self._format_parcel_date(parcel.date)}",
                                 color="#AAB2BF",
                                 size=14,
                             ),
                             ft.Text(
-                                f"{len(parcel.images)}/{parcel.target_images} imagens | processadas: {processed_images}",
+                                self._processed_images_label(processed_images),
                                 color="#CBD5E1",
                                 size=13,
                             ),
@@ -711,17 +788,61 @@ class SamplingView:
             ),
         )
 
+    def _feedback_line(self):
+        return ft.Container(
+            width=354,
+            padding=ft.Padding(left=10, top=0, right=10, bottom=0),
+            content=self.feedback_text,
+        )
+
     def _viewer_card(self):
+        parcel = self.app_state.get_active_parcel()
+        image_count = len(parcel.images) if parcel is not None else 0
+        interactive_viewer = ft.InteractiveViewer(
+            key=self.viewer_session_key,
+            content=ft.Container(
+                width=322,
+                height=322,
+                alignment=ft.Alignment.CENTER,
+                content=self.viewer_stack,
+            ),
+            min_scale=1.0,
+            max_scale=5.0,
+            boundary_margin=96,
+            interaction_update_interval=16,
+            scale_factor=120,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
         return ft.Container(
             bgcolor="#111827",
             border_radius=22,
             padding=16,
             width=354,
-            content=ft.Column(
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            content=ft.Stack(
+                width=322,
+                height=322,
+                fit=ft.StackFit.EXPAND,
                 controls=[
-                    self.placeholder,
-                    self.segmented_image,
+                    interactive_viewer,
+                    ft.Container(
+                        left=8,
+                        top=136,
+                        visible=image_count > 1,
+                        content=self._viewer_nav_zone(
+                            icon=ft.Icons.CHEVRON_LEFT_ROUNDED,
+                            on_click=self._previous_image,
+                        ),
+                    ),
+                    ft.Container(
+                        right=8,
+                        top=136,
+                        visible=image_count > 1,
+                        content=self._viewer_nav_zone(
+                            icon=ft.Icons.CHEVRON_RIGHT_ROUNDED,
+                            on_click=self._next_image,
+                        ),
+                    ),
                 ],
             ),
         )
@@ -747,43 +868,119 @@ class SamplingView:
             border_radius=22,
             padding=16,
             width=354,
-            content=ft.Column(
+            content=ft.Row(
                 spacing=12,
                 controls=[
-                    ft.Text("Resultados", color="white", size=18, weight=ft.FontWeight.W_700),
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.SPACE_EVENLY,
-                        controls=[
-                            self._metric_box("Imagem atual sadia", self.current_healthy_text, "#0B6E1B"),
-                            self._metric_box("Imagem atual severidade", self.current_severity_text, "#9A3412"),
-                        ],
+                    self._metric_box(
+                        "Area Sadia",
+                        self.current_healthy_text,
+                        self.avg_healthy_text,
+                        "#0F2A1C",
+                        "#1C8B4A",
                     ),
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.SPACE_EVENLY,
-                        controls=[
-                            self._metric_box("Media parcela sadia", self.avg_healthy_text, "#14532D"),
-                            self._metric_box("Media parcela severidade", self.avg_severity_text, "#7C2D12"),
-                        ],
+                    self._metric_box(
+                        "Severidade",
+                        self.current_severity_text,
+                        self.avg_severity_text,
+                        "#2D190F",
+                        "#D97706",
                     ),
                 ],
             ),
         )
 
-    def _metric_box(self, title: str, value_control: ft.Text, bg_color: str):
+    def _metric_box(self, title: str, value_control: ft.Text, average_control: ft.Text, bg_color: str, border_color: str):
+        border_side = ft.border.BorderSide(width=1, color=border_color)
         return ft.Container(
-            width=150,
+            expand=True,
             border_radius=18,
             bgcolor=bg_color,
+            border=ft.border.Border(
+                left=border_side,
+                top=border_side,
+                right=border_side,
+                bottom=border_side,
+            ),
             padding=14,
             content=ft.Column(
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=6,
+                spacing=8,
                 controls=[
-                    ft.Text(title, color="white", size=13, weight=ft.FontWeight.W_600, text_align=ft.TextAlign.CENTER),
+                    ft.Text(title, color="white", size=15, weight=ft.FontWeight.W_700),
+                    ft.Text("Imagem aberta", color="#CBD5E1", size=12),
                     value_control,
+                    ft.Text("Media do lote", color="#94A3B8", size=11),
+                    average_control,
                 ],
             ),
         )
+
+    def _viewer_nav_zone(self, icon, on_click):
+        return ft.Container(
+            width=38,
+            height=50,
+            alignment=ft.Alignment.CENTER,
+            on_click=on_click,
+            content=ft.Container(
+                width=34,
+                height=34,
+                border_radius=17,
+                bgcolor="#0F172A99",
+                alignment=ft.Alignment.CENTER,
+                content=ft.Icon(icon, color="#E5E7EB", size=20),
+            ),
+        )
+
+    def _permission_handler_supported(self):
+        return self.page.web or self.page.platform in {
+            ft.PagePlatform.ANDROID,
+            ft.PagePlatform.ANDROID_TV,
+            ft.PagePlatform.IOS,
+            ft.PagePlatform.WINDOWS,
+        }
+
+    def _camera_capture_supported(self):
+        return ft_camera is not None and (
+            self.page.web or self.page.platform in {
+                ft.PagePlatform.ANDROID,
+                ft.PagePlatform.IOS,
+            }
+        )
+
+    def _sync_viewer_session(self, current):
+        token = None
+        if current is not None:
+            token = f"{current.id}:{current.view_mode}:{bool(current.view_sources.get(current.view_mode))}"
+        if token != self.viewer_token:
+            self.viewer_token = token
+            self._reset_viewer_state()
+
+    def _reset_viewer_state(self):
+        self.viewer_session_key = uuid.uuid4().hex
+
+    def _active_view_mode(self):
+        return self.view_mode_dropdown.value or "mapa"
+
+    def _apply_view_mode_to_parcel(self, parcel, view_mode: str):
+        for image in parcel.images:
+            image.view_mode = view_mode
+
+    def _normalize_parcel_date(self, value: str):
+        text = (value or "").strip()
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(text, fmt).strftime("%d/%m/%Y")
+            except ValueError:
+                continue
+        return None
+
+    def _format_parcel_date(self, value: str):
+        formatted = self._normalize_parcel_date(value)
+        return formatted or (value or "")
+
+    def _processed_images_label(self, processed_images: int):
+        if processed_images == 1:
+            return "1 imagem processada"
+        return f"{processed_images} imagens processadas"
 
     def _request_refresh(self):
         if callable(self.on_state_change):

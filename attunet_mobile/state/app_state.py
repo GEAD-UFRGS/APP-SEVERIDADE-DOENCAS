@@ -13,7 +13,7 @@ class ParcelImage:
     severity_pct: float = 0.0
     view_sources: dict[str, str] = field(default_factory=dict)
     processed: bool = False
-    view_mode: str = "sobreposicao"
+    view_mode: str = "mapa"
 
     @property
     def has_visualization(self):
@@ -93,7 +93,7 @@ class Parcel:
                 healthy_pct=float(image.get("healthy_pct", 0.0)),
                 severity_pct=float(image.get("severity_pct", 0.0)),
                 processed=bool(image.get("processed", False)),
-                view_mode=image.get("view_mode", "sobreposicao"),
+                view_mode=image.get("view_mode", "mapa"),
             )
             for image in data.get("images", [])
         ]

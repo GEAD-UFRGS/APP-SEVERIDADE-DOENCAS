@@ -1,5 +1,5 @@
 {
-  "model_file": "attunet.onnx",
+  "model_file": "attunetv4.onnx",
   "input_name": "input",
   "output_name": "output",
   "input_width": 512,

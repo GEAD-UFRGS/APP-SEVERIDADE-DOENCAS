@@ -1,5 +1,5 @@
 [project]
-name = "attunet-mobile"
+name = "sevsearch"
 version = "0.1.0"
 description = "Aplicativo Flet para validacao de segmentacao com ATTUNet ONNX"
 requires-python = ">=3.10"
@@ -16,7 +16,7 @@ dependencies = [
 
 [tool.flet]
 org = "com.attunet.mobile"
-product = "ATTUNet Mobile"
+product = "SevSearch"
 company = "attunet"
 permissions = ["photo_library", "camera"]
 

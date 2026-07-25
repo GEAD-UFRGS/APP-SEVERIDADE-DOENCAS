@@ -29,7 +29,7 @@ def main(page: ft.Page):
     settings_view = SettingsView(page, app_state)
 
     def build_appbar():
-        titles = ["Amostragens", "Configuracoes"]
+        titles = ["SevSearch", "Configurações"]
         return ft.AppBar(
             title=ft.Text(titles[selected_index["value"]], color="white", weight=ft.FontWeight.W_700),
             bgcolor="#0B6E1B",
@@ -60,12 +60,12 @@ def main(page: ft.Page):
             ft.NavigationBarDestination(
                 icon=ft.Icons.GRID_VIEW_OUTLINED,
                 selected_icon=ft.Icons.GRID_VIEW_ROUNDED,
-                label="Amostragens",
+                label="SevSearch",
             ),
             ft.NavigationBarDestination(
                 icon=ft.Icons.SETTINGS_OUTLINED,
                 selected_icon=ft.Icons.SETTINGS_ROUNDED,
-                label="Configuracoes",
+                label="Configurações",
             ),
         ],
     )
@@ -81,3 +81,4 @@ if __name__ == "__main__":
         assets_dir=str(Path(__file__).parent / "assets"),
         upload_dir=str(UPLOAD_DIR),
     )
+
