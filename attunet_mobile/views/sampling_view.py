@@ -551,6 +551,7 @@ class SamplingView:
                     image_path=Path(image.path),
                     confidence=self.app_state.settings.confidence,
                     sensitivity=self.app_state.settings.sensitivity,
+                    use_hybrid_threshold=self.app_state.settings.use_hybrid_threshold,
                 )
                 image.view_sources = result["view_sources"]
                 image.healthy_pct = result["healthy_pct"]

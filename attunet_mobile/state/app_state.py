@@ -113,6 +113,7 @@ class Parcel:
 class AppSettings:
     confidence: float = 0.6
     sensitivity: float = 0.5
+    use_hybrid_threshold: bool = False
 
 
 @dataclass
@@ -139,6 +140,7 @@ class AppState:
         settings = AppSettings(
             confidence=float(settings_data.get("confidence", 0.6)),
             sensitivity=float(settings_data.get("sensitivity", 0.5)),
+            use_hybrid_threshold=bool(settings_data.get("use_hybrid_threshold", False)),
         )
         return cls(settings=settings, parcels=parcels)
 
@@ -149,6 +151,7 @@ class AppState:
                 {
                     "confidence": round(float(self.settings.confidence), 4),
                     "sensitivity": round(float(self.settings.sensitivity), 4),
+                    "use_hybrid_threshold": bool(self.settings.use_hybrid_threshold),
                 },
                 indent=2,
                 ensure_ascii=True,

@@ -5,12 +5,16 @@ import numpy as np
 class ClassificationService:
     HEALTHY_COLOR = np.array([0, 200, 0, 255], dtype=np.uint8)
     SEVERITY_COLOR = np.array([255, 165, 0, 255], dtype=np.uint8)
+    ABSOLUTE_EXG_THRESHOLD = 53.5
+    HYBRID_ADAPTIVE_WEIGHT = 0.2
+    HYBRID_SENSITIVITY_RANGE = 12.0
 
     def classify_image(
         self,
         original_rgb: np.ndarray,
         leaf_mask: np.ndarray,
         sensitivity: float,
+        use_hybrid_threshold: bool = False,
         cleanup: int = 1,
     ):
         folha_mask = leaf_mask > 0
@@ -18,6 +22,7 @@ class ClassificationService:
             original_rgb=original_rgb,
             leaf_mask=folha_mask,
             sensitivity=sensitivity,
+            use_hybrid_threshold=use_hybrid_threshold,
             cleanup=cleanup,
         )
         sadia_mask = folha_mask & (~severidade_mask)
@@ -46,6 +51,7 @@ class ClassificationService:
         original_rgb: np.ndarray,
         leaf_mask: np.ndarray,
         sensitivity: float,
+        use_hybrid_threshold: bool,
         cleanup: int,
     ):
         sensitivity = float(np.clip(sensitivity, 0.0, 1.0))
@@ -58,11 +64,10 @@ class ClassificationService:
         if exg_leaf.size == 0:
             return np.zeros_like(leaf_mask, dtype=bool)
 
-        percentile = 6.0 + (sensitivity * 24.0)
-        percentile_threshold = float(np.percentile(exg_leaf, percentile))
-        median_exg = float(np.median(exg_leaf))
-        std_exg = float(np.std(exg_leaf))
-        exg_threshold = min(percentile_threshold, median_exg - (0.18 * std_exg))
+        adaptive_threshold = self._adaptive_threshold(exg_leaf, sensitivity)
+        exg_threshold = adaptive_threshold
+        if use_hybrid_threshold:
+            exg_threshold = self._hybrid_threshold(adaptive_threshold, sensitivity)
 
         hsv = cv2.cvtColor(original_rgb, cv2.COLOR_RGB2HSV)
         h, s, v = cv2.split(hsv)
@@ -83,6 +88,24 @@ class ClassificationService:
         severity_u8 = cv2.morphologyEx(severity_u8, cv2.MORPH_OPEN, kernel)
         severity_u8 = cv2.morphologyEx(severity_u8, cv2.MORPH_CLOSE, kernel)
         return severity_u8 > 0
+
+    def _adaptive_threshold(self, exg_leaf: np.ndarray, sensitivity: float):
+        percentile = 6.0 + (sensitivity * 24.0)
+        percentile_threshold = float(np.percentile(exg_leaf, percentile))
+        median_exg = float(np.median(exg_leaf))
+        std_exg = float(np.std(exg_leaf))
+        return min(percentile_threshold, median_exg - (0.18 * std_exg))
+
+    def _hybrid_threshold(self, adaptive_threshold: float, sensitivity: float):
+        sensitivity_offset = (sensitivity - 0.5) * self.HYBRID_SENSITIVITY_RANGE
+        absolute_threshold = self.ABSOLUTE_EXG_THRESHOLD + sensitivity_offset
+        blended_threshold = (
+            ((1.0 - self.HYBRID_ADAPTIVE_WEIGHT) * absolute_threshold)
+            + (self.HYBRID_ADAPTIVE_WEIGHT * adaptive_threshold)
+        )
+        lower_bound = absolute_threshold - 10.0
+        upper_bound = absolute_threshold + 10.0
+        return float(np.clip(blended_threshold, lower_bound, upper_bound))
 
     def build_map_rgba(self, healthy_mask: np.ndarray, severity_mask: np.ndarray):
         height, width = healthy_mask.shape

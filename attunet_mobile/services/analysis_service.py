@@ -12,12 +12,19 @@ class AnalysisService:
         self.segmentation_service = SegmentationService()
         self.classification_service = ClassificationService()
 
-    def process_image(self, image_path: Path, confidence: float, sensitivity: float):
+    def process_image(
+        self,
+        image_path: Path,
+        confidence: float,
+        sensitivity: float,
+        use_hybrid_threshold: bool = False,
+    ):
         segmentation = self.segmentation_service.segment_image(image_path, confidence)
         classification = self.classification_service.classify_image(
             original_rgb=segmentation["original_rgb"],
             leaf_mask=segmentation["leaf_mask"],
             sensitivity=sensitivity,
+            use_hybrid_threshold=use_hybrid_threshold,
         )
 
         original_view = zoom_rgba_to_mask(

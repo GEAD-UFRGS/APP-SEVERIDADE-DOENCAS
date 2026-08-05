@@ -20,6 +20,7 @@ VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 DEFAULT_SETTINGS = {
     "confidence": 0.6,
     "sensitivity": 0.5,
+    "use_hybrid_threshold": False,
 }
 WEB_IMAGE_BATCH_LIMIT = 4
 WEB_IMAGE_COMPRESSION_QUALITY = 40
