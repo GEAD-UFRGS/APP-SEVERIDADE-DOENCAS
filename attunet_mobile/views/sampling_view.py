@@ -1,4 +1,5 @@
 import uuid
+import asyncio
 from datetime import date, datetime
 from pathlib import Path
 
@@ -15,7 +16,12 @@ except ImportError:
     fph = None
 
 from config import CULTURE_OPTIONS, WEB_IMAGE_BATCH_LIMIT, WEB_IMAGE_COMPRESSION_QUALITY
-from services.image_service import list_test_images, prepare_selected_images, save_temp_image_bytes
+from services.image_service import (
+    list_test_images,
+    pick_linux_image_paths,
+    prepare_selected_images,
+    save_temp_image_bytes,
+)
 from state.app_state import ParcelImage
 
 
@@ -339,26 +345,33 @@ class SamplingView:
             self.page.update()
             return
 
-        try:
-            files = await self.file_picker.pick_files(
-                allow_multiple=True,
-                file_type=ft.FilePickerFileType.IMAGE,
-                with_data=self.page.web,
-                compression_quality=WEB_IMAGE_COMPRESSION_QUALITY if self.page.web else 0,
-            )
-        except RuntimeError as exc:
-            self.status_text.value = f"Erro ao abrir seletor de imagens: {exc}"
-            self.page.update()
-            return
+        paths = []
+        if self.page.platform == ft.PagePlatform.LINUX and not self.page.web:
+            selected_paths = await asyncio.to_thread(pick_linux_image_paths, remaining)
+            if not selected_paths:
+                return
+            paths = prepare_selected_images(selected_paths, optimize_for_web=False)
+        else:
+            try:
+                files = await self.file_picker.pick_files(
+                    allow_multiple=True,
+                    file_type=ft.FilePickerFileType.IMAGE,
+                    with_data=self.page.web,
+                    compression_quality=WEB_IMAGE_COMPRESSION_QUALITY if self.page.web else 0,
+                )
+            except RuntimeError as exc:
+                self.status_text.value = f"Erro ao abrir seletor de imagens: {exc}"
+                self.page.update()
+                return
 
-        if not files:
-            return
+            if not files:
+                return
 
-        selected_files = files[:remaining]
-        if self.page.web:
-            selected_files = selected_files[: min(remaining, WEB_IMAGE_BATCH_LIMIT)]
+            selected_files = files[:remaining]
+            if self.page.web:
+                selected_files = selected_files[: min(remaining, WEB_IMAGE_BATCH_LIMIT)]
 
-        paths = prepare_selected_images(selected_files, optimize_for_web=self.page.web)
+            paths = prepare_selected_images(selected_files, optimize_for_web=self.page.web)
 
         if not paths:
             self.status_text.value = "Nao foi possivel carregar as imagens selecionadas."
@@ -946,6 +959,7 @@ class SamplingView:
                 ft.PagePlatform.IOS,
             }
         )
+
 
     def _sync_viewer_session(self, current):
         token = None
