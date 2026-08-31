@@ -2,8 +2,10 @@ import base64
 import io
 import subprocess
 import shutil
+import tkinter as tk
 import uuid
 from pathlib import Path
+from tkinter import filedialog
 from urllib.parse import unquote, urlparse
 
 import numpy as np
@@ -32,6 +34,18 @@ def list_image_paths(folder: Path) -> list[Path]:
 
 def list_test_images() -> list[Path]:
     return list_image_paths(TEST_IMAGES_DIR)
+
+
+def list_test_images_from_folder(folder: Path) -> tuple[list[Path], str | None]:
+    if not folder.exists() or not folder.is_dir():
+        return [], "A pasta selecionada nao existe."
+    subfolders = [item for item in folder.iterdir() if item.is_dir()]
+    if subfolders:
+        return [], "A pasta selecionada possui subpastas. Escolha uma pasta apenas com imagens."
+    images = list_image_paths(folder)
+    if not images:
+        return [], "Nenhuma imagem valida foi encontrada na pasta selecionada."
+    return images, None
 
 
 def image_file_to_bytes(image_path: Path) -> bytes:
@@ -77,20 +91,41 @@ def zoom_rgba_to_mask(image_rgba: np.ndarray, mask: np.ndarray, margin_ratio: fl
     return canvas
 
 
-def prepare_selected_images(files, optimize_for_web: bool = False) -> list[Path]:
+def prepare_selected_images(
+    files,
+    optimize_for_web: bool = False,
+    copy_local_files: bool = True,
+) -> list[Path]:
     ensure_app_files()
     selected_paths: list[Path] = []
 
     for index, file in enumerate(files):
+        if isinstance(file, Path):
+            if file.exists():
+                if copy_local_files:
+                    target_path = save_temp_image_file(
+                        source_path=file,
+                        file_name=file.name,
+                        index=index,
+                        optimize=optimize_for_web,
+                    )
+                    selected_paths.append(target_path)
+                else:
+                    selected_paths.append(file)
+            continue
+
         file_path = _normalize_selected_file_path(getattr(file, "path", None))
         if file_path and file_path.exists():
-            target_path = save_temp_image_file(
-                source_path=file_path,
-                file_name=getattr(file, "name", file_path.name),
-                index=index,
-                optimize=optimize_for_web,
-            )
-            selected_paths.append(target_path)
+            if copy_local_files:
+                target_path = save_temp_image_file(
+                    source_path=file_path,
+                    file_name=getattr(file, "name", file_path.name),
+                    index=index,
+                    optimize=optimize_for_web,
+                )
+                selected_paths.append(target_path)
+            else:
+                selected_paths.append(file_path)
             continue
 
         file_bytes = getattr(file, "bytes", None)
@@ -136,6 +171,50 @@ def pick_linux_image_paths(max_files: int | None = None) -> list[Path]:
     if max_files is not None:
         return selected_paths[:max_files]
     return selected_paths
+
+
+def pick_linux_directory_path() -> Path | None:
+    ensure_app_files()
+    command = [
+        "zenity",
+        "--file-selection",
+        "--directory",
+        "--title=Selecionar pasta com imagens de teste",
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    raw_output = result.stdout.strip()
+    if not raw_output:
+        return None
+    return Path(raw_output)
+
+
+def pick_desktop_image_paths() -> list[Path]:
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        selected = filedialog.askopenfilenames(
+            title="Selecionar imagens da parcela",
+            filetypes=[("Imagens", "*.jpg *.jpeg *.png *.bmp *.webp")],
+        )
+    finally:
+        root.destroy()
+    return [Path(path) for path in selected if Path(path).exists()]
+
+
+def pick_desktop_directory_path() -> Path | None:
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        selected = filedialog.askdirectory(title="Selecionar pasta com imagens de teste")
+    finally:
+        root.destroy()
+    if not selected:
+        return None
+    return Path(selected)
 
 
 def save_temp_image_file(

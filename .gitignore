@@ -33,3 +33,5 @@ attunet_mobile/build/
 
 # Logs
 *.log
+
+/imagens_teste

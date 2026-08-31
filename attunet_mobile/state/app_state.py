@@ -28,6 +28,7 @@ class Parcel:
     date: str
     culture: str
     description: str = ""
+    validation_mode: bool = False
     images: list[ParcelImage] = field(default_factory=list)
     current_index: int = 0
     saved: bool = False
@@ -50,11 +51,23 @@ class Parcel:
             self.current_index -= 1
 
     def is_ready_to_process(self):
+        if self.validation_mode:
+            return bool(self.images) and all(image.path for image in self.images)
         return (
             len(self.images) == self.target_images
             and self.target_images > 0
             and all(image.path for image in self.images)
         )
+
+    def can_add_more_images(self):
+        if self.validation_mode:
+            return True
+        return len(self.images) < self.target_images
+
+    def remaining_images(self):
+        if self.validation_mode:
+            return None
+        return max(self.target_images - len(self.images), 0)
 
     def average_healthy_pct(self):
         processed = [image.healthy_pct for image in self.images if image.processed]
@@ -72,6 +85,7 @@ class Parcel:
             "date": self.date,
             "culture": self.culture,
             "description": self.description,
+            "validation_mode": self.validation_mode,
             "saved": True,
             "images": [
                 {
@@ -104,6 +118,7 @@ class Parcel:
             date=data.get("date", ""),
             culture=data.get("culture", "Trigo"),
             description=data.get("description", ""),
+            validation_mode=bool(data.get("validation_mode", False)),
             images=images,
             saved=bool(data.get("saved", True)),
         )
@@ -167,7 +182,15 @@ class AppState:
             encoding="utf-8",
         )
 
-    def add_parcel(self, name: str, target_images: int, date: str, culture: str, description: str = ""):
+    def add_parcel(
+        self,
+        name: str,
+        target_images: int,
+        date: str,
+        culture: str,
+        description: str = "",
+        validation_mode: bool = False,
+    ):
         parcel = Parcel(
             id=uuid.uuid4().hex,
             name=name,
@@ -175,6 +198,7 @@ class AppState:
             date=date,
             culture=culture,
             description=description,
+            validation_mode=validation_mode,
         )
         self.parcels.append(parcel)
         return parcel

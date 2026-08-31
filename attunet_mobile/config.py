@@ -32,6 +32,7 @@ def ensure_app_files():
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     TEMP_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    TEST_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     if not SETTINGS_PATH.exists():
         SETTINGS_PATH.write_text(
             json.dumps(DEFAULT_SETTINGS, indent=2, ensure_ascii=True),

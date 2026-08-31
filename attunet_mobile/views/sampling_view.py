@@ -17,8 +17,9 @@ except ImportError:
 
 from config import CULTURE_OPTIONS, WEB_IMAGE_BATCH_LIMIT, WEB_IMAGE_COMPRESSION_QUALITY
 from services.image_service import (
-    list_test_images,
-    pick_linux_image_paths,
+    list_test_images_from_folder,
+    pick_desktop_directory_path,
+    pick_desktop_image_paths,
     prepare_selected_images,
     save_temp_image_bytes,
 )
@@ -55,7 +56,7 @@ class SamplingView:
         self.progress_bar = ft.ProgressBar(value=0, color="#0B6E1B", bgcolor="#334155", visible=False)
         self.process_button = ft.FilledButton(
             "Processar Parcela",
-            on_click=self._process_parcel,
+            on_click=self._start_process_parcel,
             height=54,
             width=354,
         )
@@ -208,7 +209,7 @@ class SamplingView:
                 icon=ft.Icons.PHOTO_LIBRARY_ROUNDED,
                 title="Adicionar Imagens",
                 subtitle="Selecione imagens da galeria ate completar a parcela.",
-                on_click=self._pick_images,
+                on_click=self._start_pick_images,
             ),
         ]
 
@@ -218,7 +219,7 @@ class SamplingView:
                     icon=ft.Icons.PHOTO_CAMERA_ROUNDED,
                     title="Fotografar",
                     subtitle="Abra a camera traseira do dispositivo e adicione uma imagem por vez.",
-                    on_click=self._capture_image,
+                    on_click=self._start_capture_image,
                 )
             )
 
@@ -232,7 +233,7 @@ class SamplingView:
                     icon=ft.Icons.FOLDER_OPEN_ROUNDED,
                     title="Usar imagens_teste",
                     subtitle="Apenas para teste em desktop.",
-                    on_click=self._load_test_images,
+                    on_click=self._start_load_test_images,
                 )
             )
 
@@ -257,7 +258,7 @@ class SamplingView:
                                 controls=[
                                     ft.Text(parcel.name, size=22, weight=ft.FontWeight.W_700, color="white"),
                                     ft.Text(
-                                        f"{parcel.culture} | {self._format_parcel_date(parcel.date)} | alvo: {parcel.target_images} imagens",
+                                        self._parcel_detail_header(parcel),
                                         color="#AAB2BF",
                                         size=14,
                                     ),
@@ -282,13 +283,16 @@ class SamplingView:
     def _refresh_detail(self, parcel):
         current = parcel.current_image()
         image_count = len(parcel.images)
-        remaining = max(parcel.target_images - image_count, 0)
+        remaining = parcel.remaining_images()
         self.feedback_text.color = "#94A3B8"
         self.process_button.disabled = not parcel.is_ready_to_process()
         self.save_button.disabled = not any(image.processed for image in parcel.images)
 
         if image_count == 0:
-            self.selection_text.value = f"Faltam {parcel.target_images} imagens para completar a parcela."
+            if parcel.validation_mode:
+                self.selection_text.value = "Adicione uma ou mais imagens para processar a parcela."
+            else:
+                self.selection_text.value = f"Faltam {parcel.target_images} imagens para completar a parcela."
             self.segmented_image.visible = False
             self.placeholder.visible = True
             self.placeholder.content.value = "Adicione imagens da parcela para iniciar o processamento."
@@ -300,7 +304,9 @@ class SamplingView:
             self._sync_viewer_session(None)
             return
 
-        if remaining > 0:
+        if parcel.validation_mode:
+            self.selection_text.value = self._loaded_images_label(image_count)
+        elif remaining and remaining > 0:
             plural = "imagem" if remaining == 1 else "imagens"
             self.selection_text.value = f"Faltam {remaining} {plural} para completar a parcela."
         else:
@@ -336,66 +342,77 @@ class SamplingView:
             self.current_severity_text.value = "--"
 
     async def _pick_images(self, _):
-        parcel = self.app_state.get_active_parcel()
-        if parcel is None:
-            return
-        remaining = parcel.target_images - len(parcel.images)
-        if remaining <= 0:
-            self.status_text.value = "A parcela ja atingiu a quantidade alvo de imagens."
-            self.page.update()
-            return
-
-        paths = []
-        if self.page.platform == ft.PagePlatform.LINUX and not self.page.web:
-            selected_paths = await asyncio.to_thread(pick_linux_image_paths, remaining)
-            if not selected_paths:
+        try:
+            parcel = self.app_state.get_active_parcel()
+            if parcel is None:
                 return
-            paths = prepare_selected_images(selected_paths, optimize_for_web=False)
-        else:
-            try:
+            remaining = parcel.remaining_images()
+            if remaining == 0:
+                self.status_text.value = "A parcela ja atingiu a quantidade alvo de imagens."
+                self.page.update()
+                return
+
+            if self._is_native_desktop():
+                selected_files = await asyncio.to_thread(pick_desktop_image_paths)
+                if not selected_files:
+                    return
+                if remaining is not None:
+                    selected_files = selected_files[:remaining]
+                paths = prepare_selected_images(
+                    selected_files,
+                    optimize_for_web=False,
+                    copy_local_files=False,
+                )
+            else:
                 files = await self.file_picker.pick_files(
                     allow_multiple=True,
                     file_type=ft.FilePickerFileType.IMAGE,
                     with_data=self.page.web,
                     compression_quality=WEB_IMAGE_COMPRESSION_QUALITY if self.page.web else 0,
                 )
-            except RuntimeError as exc:
-                self.status_text.value = f"Erro ao abrir seletor de imagens: {exc}"
+                if not files:
+                    return
+
+                selected_files = files if remaining is None else files[:remaining]
+                if self.page.web and remaining is not None:
+                    selected_files = selected_files[: min(remaining, WEB_IMAGE_BATCH_LIMIT)]
+                elif self.page.web:
+                    selected_files = selected_files[:WEB_IMAGE_BATCH_LIMIT]
+
+                paths = prepare_selected_images(
+                    selected_files,
+                    optimize_for_web=self.page.web,
+                    copy_local_files=True,
+                )
+
+            if not paths:
+                self.status_text.value = "Nao foi possivel carregar as imagens selecionadas."
                 self.page.update()
                 return
 
-            if not files:
-                return
-
-            selected_files = files[:remaining]
-            if self.page.web:
-                selected_files = selected_files[: min(remaining, WEB_IMAGE_BATCH_LIMIT)]
-
-            paths = prepare_selected_images(selected_files, optimize_for_web=self.page.web)
-
-        if not paths:
-            self.status_text.value = "Nao foi possivel carregar as imagens selecionadas."
-            self.page.update()
-            return
-
-        for path in paths:
-            parcel.images.append(
-                ParcelImage(
-                    id=uuid.uuid4().hex,
-                    path=str(path),
-                    view_mode=self._active_view_mode(),
+            for path in paths:
+                parcel.images.append(
+                    ParcelImage(
+                        id=uuid.uuid4().hex,
+                        path=str(path),
+                        view_mode=self._active_view_mode(),
+                    )
                 )
-            )
-
-        self.status_text.value = f"{len(parcel.images)}/{parcel.target_images} imagens carregadas."
-        self._request_refresh()
+            self.status_text.value = self._loaded_images_label(len(parcel.images), parcel)
+            self._request_refresh()
+        except RuntimeError as exc:
+            self.status_text.value = f"Erro ao abrir seletor de imagens: {exc}"
+            self.page.update()
+        except Exception as exc:
+            self.status_text.value = f"Erro ao carregar imagens: {exc}"
+            self.page.update()
 
     async def _capture_image(self, _):
         parcel = self.app_state.get_active_parcel()
         if parcel is None:
             return
-        remaining = parcel.target_images - len(parcel.images)
-        if remaining <= 0:
+        remaining = parcel.remaining_images()
+        if remaining == 0:
             self.status_text.value = "A parcela ja atingiu a quantidade alvo de imagens."
             self.page.update()
             return
@@ -510,35 +527,76 @@ class SamplingView:
                 view_mode=self._active_view_mode(),
             )
         )
-        self.status_text.value = f"{len(parcel.images)}/{parcel.target_images} imagens carregadas."
+        self.status_text.value = self._loaded_images_label(len(parcel.images), parcel)
         self.camera = None
         self.camera_status_text = None
         self.page.pop_dialog()
         self._request_refresh()
 
-    def _load_test_images(self, _):
-        parcel = self.app_state.get_active_parcel()
-        if parcel is None:
-            return
-        remaining = parcel.target_images - len(parcel.images)
-        if remaining <= 0:
-            self.status_text.value = "A parcela ja atingiu a quantidade alvo de imagens."
-            self.page.update()
-            return
+    async def _load_test_images(self, _):
+        try:
+            parcel = self.app_state.get_active_parcel()
+            if parcel is None:
+                return
+            remaining = parcel.remaining_images()
+            if remaining == 0:
+                self.status_text.value = "A parcela ja atingiu a quantidade alvo de imagens."
+                self.page.update()
+                return
 
-        paths = list_test_images()[:remaining]
-        for path in paths:
-            parcel.images.append(
-                ParcelImage(
-                    id=uuid.uuid4().hex,
-                    path=str(path),
-                    view_mode=self._active_view_mode(),
-                )
+            source_paths = []
+            if self._is_native_desktop():
+                folder_path = await self._pick_test_folder()
+                if folder_path is None:
+                    return
+                source_paths, error_message = list_test_images_from_folder(folder_path)
+                if error_message:
+                    self.status_text.value = error_message
+                    self.page.update()
+                    return
+            else:
+                self.status_text.value = "Usar imagens_teste esta disponivel apenas no desktop."
+                self.page.update()
+                return
+
+            selected_paths = source_paths if remaining is None else source_paths[:remaining]
+            paths = prepare_selected_images(
+                selected_paths,
+                optimize_for_web=False,
+                copy_local_files=False,
             )
-        self.status_text.value = f"{len(parcel.images)}/{parcel.target_images} imagens carregadas."
-        self._request_refresh()
+            if not paths:
+                self.status_text.value = "Nenhuma imagem valida foi carregada da pasta selecionada."
+                self.page.update()
+                return
 
-    def _process_parcel(self, _):
+            for path in paths:
+                parcel.images.append(
+                    ParcelImage(
+                        id=uuid.uuid4().hex,
+                        path=str(path),
+                        view_mode=self._active_view_mode(),
+                    )
+                )
+            self.status_text.value = self._loaded_images_label(len(parcel.images), parcel)
+            self._request_refresh()
+        except Exception as exc:
+            self.status_text.value = f"Erro ao carregar pasta de teste: {exc}"
+            self.page.update()
+
+    def _start_pick_images(self, event):
+        self.page.run_task(self._pick_images, event)
+
+    def _start_capture_image(self, event):
+        self.page.run_task(self._capture_image, event)
+
+    def _start_load_test_images(self, event):
+        self.page.run_task(self._load_test_images, event)
+
+    def _start_process_parcel(self, event):
+        self.page.run_task(self._process_parcel, event)
+
+    async def _process_parcel(self, _):
         parcel = self.app_state.get_active_parcel()
         if parcel is None:
             return
@@ -552,15 +610,18 @@ class SamplingView:
             self.progress_bar.visible = True
             self.progress_bar.value = 0
             self.process_button.disabled = True
-            self.status_text.value = f"Processando 0/{total} imagens..."
+            self.status_text.value = f"0 de {total} imagens processadas | faltam {total}"
             self.page.update()
 
             for index, image in enumerate(parcel.images, start=1):
                 if image.path is None:
                     continue
-                self.status_text.value = f"Processando {index}/{total} imagens..."
+                remaining = max(total - index, 0)
+                self.status_text.value = f"{index - 1} de {total} imagens processadas | faltam {remaining + 1}"
                 self.page.update()
-                result = self.analysis_service.process_image(
+
+                result = await asyncio.to_thread(
+                    self.analysis_service.process_image,
                     image_path=Path(image.path),
                     confidence=self.app_state.settings.confidence,
                     sensitivity=self.app_state.settings.sensitivity,
@@ -571,6 +632,7 @@ class SamplingView:
                 image.severity_pct = result["severity_pct"]
                 image.processed = True
                 self.progress_bar.value = index / total
+                self.status_text.value = f"{index} de {total} imagens processadas | faltam {remaining}"
                 self.page.update()
 
             self.status_text.value = "Parcela processada com sucesso."
@@ -618,6 +680,19 @@ class SamplingView:
     def _open_add_parcel_dialog(self, _):
         name_field = ft.TextField(label="Nome da parcela", autofocus=True)
         target_field = ft.TextField(label="Quantidade alvo de imagens", value="3", keyboard_type=ft.KeyboardType.NUMBER)
+
+        def toggle_validation_mode(_):
+            target_field.visible = not bool(validation_checkbox.value)
+            self.page.update()
+
+        validation_checkbox = ft.Checkbox(
+            label="Testes de Validacao",
+            value=False,
+            check_color="white",
+            active_color="#4ADE80",
+            label_style=ft.TextStyle(color="white"),
+            on_change=toggle_validation_mode,
+        )
         date_field = ft.TextField(label="Data", value=date.today().strftime("%d/%m/%Y"))
         culture_dropdown = ft.Dropdown(
             label="Cultura",
@@ -633,20 +708,24 @@ class SamplingView:
             self.page.update()
 
         def create_parcel(_):
-            try:
-                target_images = int(target_field.value)
-            except (TypeError, ValueError):
-                feedback_text.value = "Informe um numero valido de imagens."
-                self.page.update()
-                return
             if not name_field.value.strip():
                 feedback_text.value = "Informe o nome da parcela."
                 self.page.update()
                 return
-            if target_images <= 0:
-                feedback_text.value = "A quantidade alvo deve ser maior que zero."
-                self.page.update()
-                return
+            validation_mode = bool(validation_checkbox.value)
+            if validation_mode:
+                target_images = 0
+            else:
+                try:
+                    target_images = int(target_field.value)
+                except (TypeError, ValueError):
+                    feedback_text.value = "Informe um numero valido de imagens."
+                    self.page.update()
+                    return
+                if target_images <= 0:
+                    feedback_text.value = "A quantidade alvo deve ser maior que zero."
+                    self.page.update()
+                    return
             formatted_date = self._normalize_parcel_date(date_field.value)
             if formatted_date is None:
                 feedback_text.value = "Informe a data no formato DD/MM/AAAA."
@@ -659,6 +738,7 @@ class SamplingView:
                 date=formatted_date,
                 culture=culture_dropdown.value or CULTURE_OPTIONS[0],
                 description=description_field.value.strip(),
+                validation_mode=validation_mode,
             )
             self.app_state.open_parcel(parcel.id)
             close_dialog()
@@ -672,6 +752,7 @@ class SamplingView:
                 tight=True,
                 controls=[
                     name_field,
+                    validation_checkbox,
                     target_field,
                     date_field,
                     culture_dropdown,
@@ -733,6 +814,11 @@ class SamplingView:
                                 f"{parcel.culture} | {self._format_parcel_date(parcel.date)}",
                                 color="#AAB2BF",
                                 size=14,
+                            ),
+                            ft.Text(
+                                "Testes de Validacao" if parcel.validation_mode else f"Alvo: {parcel.target_images} imagens",
+                                color="#CBD5E1",
+                                size=13,
                             ),
                             ft.Text(
                                 self._processed_images_label(processed_images),
@@ -960,6 +1046,27 @@ class SamplingView:
             }
         )
 
+    def _is_native_desktop(self):
+        return (not self.page.web) and self.page.platform in {
+            ft.PagePlatform.WINDOWS,
+            ft.PagePlatform.LINUX,
+            ft.PagePlatform.MACOS,
+        }
+
+    async def _pick_test_folder(self):
+        if self._is_native_desktop():
+            return await asyncio.to_thread(pick_desktop_directory_path)
+        try:
+            selected = await self.file_picker.get_directory_path(
+                dialog_title="Selecionar pasta com imagens de teste"
+            )
+        except RuntimeError as exc:
+            self.status_text.value = f"Erro ao abrir seletor de pasta: {exc}"
+            self.page.update()
+            return None
+        if not selected:
+            return None
+        return Path(selected)
 
     def _sync_viewer_session(self, current):
         token = None
@@ -991,6 +1098,19 @@ class SamplingView:
     def _format_parcel_date(self, value: str):
         formatted = self._normalize_parcel_date(value)
         return formatted or (value or "")
+
+    def _parcel_detail_header(self, parcel):
+        if parcel.validation_mode:
+            return f"{parcel.culture} | {self._format_parcel_date(parcel.date)} | Testes de Validacao"
+        return f"{parcel.culture} | {self._format_parcel_date(parcel.date)} | alvo: {parcel.target_images} imagens"
+
+    def _loaded_images_label(self, image_count: int, parcel=None):
+        target_parcel = parcel or self.app_state.get_active_parcel()
+        if target_parcel is not None and not target_parcel.validation_mode:
+            return f"{image_count}/{target_parcel.target_images} imagens carregadas."
+        if image_count == 1:
+            return "1 imagem carregada."
+        return f"{image_count} imagens carregadas."
 
     def _processed_images_label(self, processed_images: int):
         if processed_images == 1:

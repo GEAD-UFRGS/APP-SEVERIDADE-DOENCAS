@@ -1,5 +1,7 @@
 import flet as ft
 
+from config import DEFAULT_SETTINGS
+
 
 class SettingsView:
     def __init__(self, page: ft.Page, app_state):
@@ -60,9 +62,19 @@ class SettingsView:
                             spacing=14,
                             controls=[
                                 ft.Text("Confianca do modelo", size=20, weight=ft.FontWeight.W_700, color="white"),
+                                ft.Text(
+                                    "Quanto maior a confianca, mais rigorosa fica a segmentacao da folha. Valores menores tendem a aceitar mais pixels como folha.",
+                                    size=13,
+                                    color="#AAB2BF",
+                                ),
                                 self.confidence_slider,
                                 self.confidence_text,
                                 ft.Text("Sensibilidade da classificacao", size=20, weight=ft.FontWeight.W_700, color="white"),
+                                ft.Text(
+                                    "Quanto maior a sensibilidade, mais pixels da folha tendem a ser classificados como severidade. Valores menores deixam a classificacao mais conservadora.",
+                                    size=13,
+                                    color="#AAB2BF",
+                                ),
                                 self.sensitivity_slider,
                                 self.sensitivity_text,
                                 self.hybrid_threshold_checkbox,
@@ -72,6 +84,7 @@ class SettingsView:
                                     color="#AAB2BF",
                                 ),
                                 ft.FilledButton("Salvar configuracao", icon=ft.Icons.SAVE_ROUNDED, on_click=self._save),
+                                ft.OutlinedButton("Restaurar padrao", icon=ft.Icons.RESTART_ALT_ROUNDED, on_click=self._restore_defaults),
                                 self.status_text,
                             ],
                         ),
@@ -95,4 +108,17 @@ class SettingsView:
         self.app_state.settings.use_hybrid_threshold = bool(self.hybrid_threshold_checkbox.value)
         self.app_state.save_settings()
         self.status_text.value = "Configuracao salva em json."
+        self.page.update()
+
+    def _restore_defaults(self, _):
+        self.confidence_slider.value = float(DEFAULT_SETTINGS["confidence"])
+        self.sensitivity_slider.value = float(DEFAULT_SETTINGS["sensitivity"])
+        self.hybrid_threshold_checkbox.value = bool(DEFAULT_SETTINGS["use_hybrid_threshold"])
+        self.confidence_text.value = f"Confianca atual: {self.confidence_slider.value:.2f}"
+        self.sensitivity_text.value = f"Sensibilidade atual: {self.sensitivity_slider.value:.2f}"
+        self.app_state.settings.confidence = self.confidence_slider.value
+        self.app_state.settings.sensitivity = self.sensitivity_slider.value
+        self.app_state.settings.use_hybrid_threshold = self.hybrid_threshold_checkbox.value
+        self.app_state.save_settings()
+        self.status_text.value = "Configuracoes padrao restauradas."
         self.page.update()
