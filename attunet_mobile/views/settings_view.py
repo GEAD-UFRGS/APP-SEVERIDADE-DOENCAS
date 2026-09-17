@@ -2,6 +2,9 @@ import flet as ft
 
 from config import DEFAULT_SETTINGS
 
+MAX_CONTENT_WIDTH = 430
+COMPACT_BREAKPOINT = 360
+
 
 class SettingsView:
     def __init__(self, page: ft.Page, app_state):
@@ -41,12 +44,20 @@ class SettingsView:
         )
 
     def build(self):
+        content_width = self._content_width()
+        content_padding = self._content_padding(content_width)
         return ft.Container(
             expand=True,
-            width=390,
-            padding=ft.Padding(left=18, top=18, right=18, bottom=24),
+            width=content_width,
+            padding=ft.Padding(
+                left=content_padding,
+                top=18,
+                right=content_padding,
+                bottom=24,
+            ),
             alignment=ft.Alignment.TOP_CENTER,
             content=ft.Column(
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
                 controls=[
                     ft.Text("Configuracoes", size=24, weight=ft.FontWeight.W_700, color="white"),
                     ft.Text(
@@ -93,6 +104,13 @@ class SettingsView:
                 spacing=16,
             ),
         )
+
+    def _content_width(self):
+        page_width = self.page.width or MAX_CONTENT_WIDTH
+        return min(MAX_CONTENT_WIDTH, max(0, page_width))
+
+    def _content_padding(self, content_width):
+        return 14 if content_width < COMPACT_BREAKPOINT else 18
 
     def _on_confidence_change(self, event: ft.ControlEvent):
         self.confidence_text.value = f"Confianca atual: {event.control.value:.2f}"

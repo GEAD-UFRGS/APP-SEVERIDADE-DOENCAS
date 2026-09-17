@@ -11,6 +11,7 @@ MODEL_METADATA_PATH = MODELS_DIR / "model_metadata.json"
 STATE_DIR = APP_DIR / "state"
 SETTINGS_PATH = STATE_DIR / "settings.json"
 PARCELS_PATH = STATE_DIR / "saved_parcels.json"
+EXPERIMENTS_PATH = STATE_DIR / "experiments.json"
 TEMP_IMAGES_DIR = STATE_DIR / "temp_images"
 UPLOAD_DIR = STATE_DIR
 TEST_IMAGES_DIR = PROJECT_ROOT / "imagens_teste"

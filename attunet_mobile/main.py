@@ -5,6 +5,7 @@ import flet as ft
 
 from config import APP_TITLE, UPLOAD_DIR, WEB_UPLOAD_SECRET
 from services.analysis_service import AnalysisService
+from services.image_service import clear_temp_images
 from state.app_state import AppState
 from views.sampling_view import SamplingView
 from views.settings_view import SettingsView
@@ -12,24 +13,30 @@ from views.settings_view import SettingsView
 
 def main(page: ft.Page):
     page.title = APP_TITLE
-    page.window_width = 360
+    page.window_width = 390
     page.window_height = 780
-    page.window_resizable = False
+    page.window_min_width = 280
+    page.window_resizable = True
     page.padding = 0
     page.spacing = 0
     page.bgcolor = "#0F141B"
     page.theme_mode = ft.ThemeMode.DARK
     page.scroll = ft.ScrollMode.AUTO
+    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
 
+    clear_temp_images()
     app_state = AppState.load()
     analysis_service = AnalysisService()
-    content = ft.Container(expand=True)
+    content = ft.Container(
+        expand=True,
+        alignment=ft.Alignment.TOP_CENTER,
+    )
     selected_index = {"value": 0}
     sampling_view = SamplingView(page, app_state, analysis_service)
     settings_view = SettingsView(page, app_state)
 
     def build_appbar():
-        titles = ["SevSearch", "Configurações"]
+        titles = [sampling_view.current_title(), "Configurações"]
         return ft.AppBar(
             title=ft.Text(titles[selected_index["value"]], color="white", weight=ft.FontWeight.W_700),
             bgcolor="#0B6E1B",
@@ -58,9 +65,9 @@ def main(page: ft.Page):
         on_change=on_navigation_change,
         destinations=[
             ft.NavigationBarDestination(
-                icon=ft.Icons.GRID_VIEW_OUTLINED,
-                selected_icon=ft.Icons.GRID_VIEW_ROUNDED,
-                label="SevSearch",
+                icon=ft.Icons.HOME_OUTLINED,
+                selected_icon=ft.Icons.HOME_ROUNDED,
+                label="Início",
             ),
             ft.NavigationBarDestination(
                 icon=ft.Icons.SETTINGS_OUTLINED,
@@ -81,4 +88,3 @@ if __name__ == "__main__":
         assets_dir=str(Path(__file__).parent / "assets"),
         upload_dir=str(UPLOAD_DIR),
     )
-
