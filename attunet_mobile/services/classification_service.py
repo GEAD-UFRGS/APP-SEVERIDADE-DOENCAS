@@ -1,30 +1,32 @@
 import cv2
 import numpy as np
 
+from config import DAMAGE_MODE_NECROTIC, DEFAULT_DAMAGE_MODE
+
 
 class ClassificationService:
     HEALTHY_COLOR = np.array([0, 200, 0, 255], dtype=np.uint8)
     SEVERITY_COLOR = np.array([255, 165, 0, 255], dtype=np.uint8)
-    ABSOLUTE_EXG_THRESHOLD = 53.5
-    HYBRID_ADAPTIVE_WEIGHT = 0.2
-    HYBRID_SENSITIVITY_RANGE = 12.0
+    MAX_ANALYSIS_SIDE = 1600
 
     def classify_image(
         self,
         original_rgb: np.ndarray,
         leaf_mask: np.ndarray,
-        sensitivity: float,
-        use_hybrid_threshold: bool = False,
-        cleanup: int = 1,
+        damage_mode: str = DEFAULT_DAMAGE_MODE,
+        cleanup: bool = True,
     ):
         folha_mask = leaf_mask > 0
-        severidade_mask = self._severity_mask(
-            original_rgb=original_rgb,
-            leaf_mask=folha_mask,
-            sensitivity=sensitivity,
-            use_hybrid_threshold=use_hybrid_threshold,
-            cleanup=cleanup,
-        )
+        analysis_rgb, analysis_leaf_mask = self._analysis_image(original_rgb, folha_mask)
+        severidade_mask = self._severity_mask(analysis_rgb, analysis_leaf_mask, damage_mode, cleanup)
+        if severidade_mask.shape != folha_mask.shape:
+            height, width = folha_mask.shape
+            severidade_mask = cv2.resize(
+                severidade_mask.astype(np.uint8),
+                (width, height),
+                interpolation=cv2.INTER_NEAREST,
+            ) > 0
+        severidade_mask &= folha_mask
         sadia_mask = folha_mask & (~severidade_mask)
 
         folha_px = int(np.count_nonzero(folha_mask))
@@ -46,66 +48,144 @@ class ClassificationService:
             "severity_pct": round(severity_pct, 2),
         }
 
-    def _severity_mask(
-        self,
-        original_rgb: np.ndarray,
-        leaf_mask: np.ndarray,
-        sensitivity: float,
-        use_hybrid_threshold: bool,
-        cleanup: int,
-    ):
-        sensitivity = float(np.clip(sensitivity, 0.0, 1.0))
+    def _analysis_image(self, original_rgb, leaf_mask):
+        height, width = leaf_mask.shape
+        largest_side = max(height, width)
+        if largest_side <= self.MAX_ANALYSIS_SIDE:
+            return original_rgb, leaf_mask
+        scale = self.MAX_ANALYSIS_SIDE / largest_side
+        analysis_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+        resized_rgb = cv2.resize(original_rgb, analysis_size, interpolation=cv2.INTER_AREA)
+        resized_mask = cv2.resize(leaf_mask.astype(np.uint8), analysis_size, interpolation=cv2.INTER_NEAREST) > 0
+        return resized_rgb, resized_mask
 
-        img_bgr = cv2.cvtColor(original_rgb, cv2.COLOR_RGB2BGR)
-        b, g, r = cv2.split(img_bgr.astype(np.float32))
-
-        exg = 2.0 * g - r - b
-        exg_leaf = exg[leaf_mask]
-        if exg_leaf.size == 0:
+    def _severity_mask(self, original_rgb, leaf_mask, damage_mode, cleanup):
+        if not np.any(leaf_mask):
             return np.zeros_like(leaf_mask, dtype=bool)
 
-        adaptive_threshold = self._adaptive_threshold(exg_leaf, sensitivity)
-        exg_threshold = adaptive_threshold
-        if use_hybrid_threshold:
-            exg_threshold = self._hybrid_threshold(adaptive_threshold, sensitivity)
+        features = self._color_features(original_rgb)
+        reference = self._healthy_reference(features, leaf_mask)
+        necrotic = self._necrotic_mask(features, leaf_mask, reference)
+
+        if damage_mode == DAMAGE_MODE_NECROTIC:
+            severity = necrotic
+        else:
+            severity = necrotic | self._chlorotic_mask(features, leaf_mask, reference)
+
+        return self._clean_mask(severity, leaf_mask) if cleanup else severity
+
+    def _color_features(self, original_rgb):
+        rgb = original_rgb.astype(np.float32)
+        r, g, b = cv2.split(rgb)
+        total = r + g + b + 1.0
+        normalized_exg = (2.0 * g - r - b) / total
 
         hsv = cv2.cvtColor(original_rgb, cv2.COLOR_RGB2HSV)
-        h, s, v = cv2.split(hsv)
+        h, s, v = cv2.split(hsv.astype(np.float32))
+        lab = cv2.cvtColor(original_rgb, cv2.COLOR_RGB2LAB)
+        _, lab_a, lab_b = cv2.split(lab.astype(np.float32))
+        return {
+            "r": r,
+            "g": g,
+            "b": b,
+            "h": h,
+            "s": s,
+            "v": v,
+            "lab_a": lab_a,
+            "lab_b": lab_b,
+            "exg": normalized_exg,
+        }
 
-        green_hsv = (h >= 25) & (h <= 110) & (s >= 18)
-        dominant_green = (g >= (r * 1.03)) & (g >= (b * 0.92))
-        light_green = (g >= (r + 8.0)) & (g >= (b + 2.0)) & (v >= 60)
-        healthy_green = leaf_mask & ((green_hsv & dominant_green) | light_green)
+    def _healthy_reference(self, features, leaf_mask):
+        h = features["h"]
+        s = features["s"]
+        exg = features["exg"]
+        green_candidates = leaf_mask & (h >= 28.0) & (h <= 90.0) & (s >= 22.0)
 
-        low_vegetation = exg <= exg_threshold
-        yellow_or_necrotic = ((h < 25) | (h > 110) | (s < 28)) & (g <= (r * 1.08))
+        if np.count_nonzero(green_candidates) >= 32:
+            candidate_exg = exg[green_candidates]
+            cutoff = float(np.percentile(candidate_exg, 65.0))
+            reference_mask = green_candidates & (exg >= cutoff)
+        else:
+            cutoff = float(np.percentile(exg[leaf_mask], 75.0))
+            reference_mask = leaf_mask & (exg >= cutoff)
 
-        severity = leaf_mask & low_vegetation & (~healthy_green) & yellow_or_necrotic
+        return {
+            "exg": float(np.median(exg[reference_mask])),
+            "a": float(np.median(features["lab_a"][reference_mask])),
+            "b": float(np.median(features["lab_b"][reference_mask])),
+            "s": float(np.median(s[reference_mask])),
+            "v": float(np.median(features["v"][reference_mask])),
+            "dark_v": float(np.percentile(features["v"][leaf_mask], 18.0)),
+        }
 
-        kernel_size = 2 * max(1, int(cleanup)) + 1
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        severity_u8 = severity.astype(np.uint8) * 255
-        severity_u8 = cv2.morphologyEx(severity_u8, cv2.MORPH_OPEN, kernel)
-        severity_u8 = cv2.morphologyEx(severity_u8, cv2.MORPH_CLOSE, kernel)
-        return severity_u8 > 0
+    def _necrotic_mask(self, features, leaf_mask, reference):
+        r = features["r"]
+        g = features["g"]
+        b = features["b"]
+        h = features["h"]
+        s = features["s"]
+        v = features["v"]
+        lab_a = features["lab_a"]
+        lab_b = features["lab_b"]
+        exg = features["exg"]
 
-    def _adaptive_threshold(self, exg_leaf: np.ndarray, sensitivity: float):
-        percentile = 6.0 + (sensitivity * 24.0)
-        percentile_threshold = float(np.percentile(exg_leaf, percentile))
-        median_exg = float(np.median(exg_leaf))
-        std_exg = float(np.std(exg_leaf))
-        return min(percentile_threshold, median_exg - (0.18 * std_exg))
-
-    def _hybrid_threshold(self, adaptive_threshold: float, sensitivity: float):
-        sensitivity_offset = (sensitivity - 0.5) * self.HYBRID_SENSITIVITY_RANGE
-        absolute_threshold = self.ABSOLUTE_EXG_THRESHOLD + sensitivity_offset
-        blended_threshold = (
-            ((1.0 - self.HYBRID_ADAPTIVE_WEIGHT) * absolute_threshold)
-            + (self.HYBRID_ADAPTIVE_WEIGHT * adaptive_threshold)
+        lost_green = (lab_a >= max(reference["a"] + 7.0, 120.0)) & (exg <= reference["exg"] - 0.055)
+        brown = (
+            (h <= 27.0)
+            & (s >= 32.0)
+            & (r >= g * 0.93)
+            & (b <= np.maximum(r, g) * 0.92)
+            & (v <= 238.0)
         )
-        lower_bound = absolute_threshold - 10.0
-        upper_bound = absolute_threshold + 10.0
-        return float(np.clip(blended_threshold, lower_bound, upper_bound))
+        deep_brown = (lab_a >= 134.0) & (lab_b >= 126.0) & (exg <= 0.035)
+        dark_non_green = (
+            (v <= min(reference["dark_v"] + 8.0, reference["v"] * 0.62))
+            & (exg <= reference["exg"] - 0.07)
+            & ((s >= 24.0) | (r >= g))
+        )
+        neutral_damage = (v <= 92.0) & (s <= 55.0) & (exg <= 0.01) & (r >= g * 0.94)
+
+        return leaf_mask & ((lost_green & brown) | deep_brown | dark_non_green | neutral_damage)
+
+    def _chlorotic_mask(self, features, leaf_mask, reference):
+        h = features["h"]
+        s = features["s"]
+        v = features["v"]
+        lab_a = features["lab_a"]
+        lab_b = features["lab_b"]
+        exg = features["exg"]
+
+        green_loss = (lab_a >= reference["a"] + 4.0) & (exg <= reference["exg"] - 0.045)
+        yellow = (
+            (h >= 17.0)
+            & (h <= 47.0)
+            & (s >= 20.0)
+            & (lab_b >= max(reference["b"] + 5.0, 135.0))
+            & (lab_a >= reference["a"] + 3.0)
+        )
+        pale_green = (
+            (h >= 25.0)
+            & (h <= 65.0)
+            & green_loss
+            & (lab_b >= reference["b"] + 2.0)
+            & (v >= reference["v"] * 0.55)
+        )
+        absolute_chlorosis = (
+            (h >= 18.0)
+            & (h <= 43.0)
+            & (lab_a >= 116.0)
+            & (lab_b >= 143.0)
+            & (exg <= 0.10)
+        )
+
+        return leaf_mask & (yellow | pale_green | absolute_chlorosis)
+
+    def _clean_mask(self, severity, leaf_mask):
+        severity_u8 = severity.astype(np.uint8)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        closed = cv2.morphologyEx(severity_u8, cv2.MORPH_CLOSE, kernel)
+        return (closed > 0) & leaf_mask
 
     def build_map_rgba(self, healthy_mask: np.ndarray, severity_mask: np.ndarray):
         height, width = healthy_mask.shape

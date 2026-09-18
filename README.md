@@ -6,13 +6,13 @@ Aplicativo mobile em Python com Flet para quantificar severidade em folhas a par
 
 O fluxo principal do software e:
 
-1. Criar uma parcela informando nome, cultura, data e quantidade alvo de imagens.
-2. Adicionar fotos da galeria, camera ou imagens de teste no desktop.
-3. Processar cada parcela quando o total de imagens esperado estiver completo.
-4. Segmentar a folha com o modelo ATTUNet em ONNX.
-5. Classificar os pixels em area saudavel e area com severidade.
-6. Exibir visualizacao original, sobreposicao e mapa, alem dos percentuais por imagem e media da parcela.
-7. Salvar os resultados resumidos em JSON.
+1. Criar um experimento informando nome, cultura, data inicial e descricao.
+2. Organizar o experimento em tratamentos, parcelas e leituras.
+3. Definir a data, a quantidade alvo de imagens e o tipo de dano de cada leitura.
+4. Adicionar fotos da galeria, camera ou imagens de teste no desktop.
+5. Processar pelo experimento todas as leituras completas ainda pendentes.
+6. Segmentar a folha com o modelo ATTUNet em ONNX e classificar os pixels por cor com o perfil de pontos necroticos ou de pontos necroticos e cloroticos.
+7. Exibir resultados por imagem, leitura, parcela e tratamento, salvando os valores em JSON.
 
 ## Estrutura
 
@@ -20,7 +20,7 @@ O fluxo principal do software e:
 - `attunet_mobile/assets/models/`: modelo ONNX e metadados.
 - `attunet_mobile/services/`: servicos de segmentacao, classificacao e analise.
 - `attunet_mobile/views/`: telas de amostragem e configuracoes.
-- `attunet_mobile/state/`: configuracoes e parcelas salvas localmente.
+- `attunet_mobile/state/`: configuracoes e experimentos salvos localmente.
 
 ## Executando
 

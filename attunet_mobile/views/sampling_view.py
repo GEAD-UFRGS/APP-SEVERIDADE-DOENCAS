@@ -16,7 +16,7 @@ try:
 except ImportError:
     fph = None
 
-from config import WEB_IMAGE_BATCH_LIMIT, WEB_IMAGE_COMPRESSION_QUALITY
+from config import DAMAGE_MODE_LABELS, WEB_IMAGE_BATCH_LIMIT, WEB_IMAGE_COMPRESSION_QUALITY
 from services.image_service import (
     list_test_images_from_folder,
     pick_desktop_directory_path,
@@ -62,10 +62,10 @@ class SamplingView:
             on_click=self._start_process_unit_test,
             height=54,
         )
-        self.block_process_button = ft.FilledButton(
-            "Processar bloco",
+        self.experiment_process_button = ft.FilledButton(
+            "Processar experimento",
             icon=ft.Icons.PLAY_ARROW_ROUNDED,
-            on_click=self._start_process_block,
+            on_click=self._start_process_experiment,
             height=56,
         )
         self.view_mode_dropdown = ft.Dropdown(
@@ -101,8 +101,8 @@ class SamplingView:
         level = self.app_state.active_level
         if level == "experiment" and self.app_state.get_active_experiment():
             return self._build_experiment()
-        if level == "block" and self.app_state.get_active_block():
-            return self._build_block()
+        if level == "treatment" and self.app_state.get_active_treatment():
+            return self._build_treatment()
         if level == "plot" and self.app_state.get_active_plot():
             return self._build_plot()
         if level in {"reading", "test"} and self.app_state.get_active_parcel():
@@ -114,7 +114,7 @@ class SamplingView:
         titles = {
             "home": "SevSearch",
             "experiment": "Experimento",
-            "block": "Bloco",
+            "treatment": "Tratamento",
             "plot": "Parcela",
             "reading": "Leitura",
             "test": "Teste unitário",
@@ -128,7 +128,7 @@ class SamplingView:
         return self._screen(
             [
                 ft.Text("Amostragens", size=28, weight=ft.FontWeight.W_700, color=TEXT),
-                ft.Text("Organize avaliações de campo e acompanhe resultados por bloco.", size=15, color=MUTED),
+                ft.Text("Organize avaliações de campo e acompanhe resultados por tratamento.", size=15, color=MUTED),
                 self._primary_action(
                     ft.Icons.ADD_ROUNDED,
                     "Criar novo experimento",
@@ -148,44 +148,43 @@ class SamplingView:
 
     def _build_experiment(self):
         experiment = self.app_state.get_active_experiment()
-        blocks = [self._block_card(block) for block in experiment.blocks]
-        if not blocks:
-            blocks = [self._empty_card("Nenhum bloco neste experimento.")]
+        treatments = [self._treatment_card(treatment) for treatment in experiment.treatments]
+        if not treatments:
+            treatments = [self._empty_card("Nenhum tratamento neste experimento.")]
+        self.experiment_process_button.disabled = not self._experiment_ready_readings(experiment)
         return self._screen(
             [
                 self._header(experiment.name, f"{experiment.culture} • início {experiment.start_date}"),
                 ft.Text(experiment.description or "Sem descrição adicional.", size=14, color=MUTED),
                 self._primary_action(
                     ft.Icons.ADD_ROUNDED,
-                    "Adicionar bloco",
-                    "Crie uma nova divisão dentro do experimento.",
-                    self._open_add_block_dialog,
+                    "Adicionar tratamento",
+                    "Crie um novo tratamento dentro do experimento.",
+                    self._open_add_treatment_dialog,
                 ),
-                ft.Text("Blocos", size=20, weight=ft.FontWeight.W_700, color=TEXT),
-                *blocks,
+                self.experiment_process_button,
+                self.progress_bar,
+                self._feedback_line(),
+                ft.Text("Tratamentos", size=20, weight=ft.FontWeight.W_700, color=TEXT),
+                *treatments,
             ]
         )
 
-    def _build_block(self):
-        block = self.app_state.get_active_block()
-        parcels = [self._plot_card(plot) for plot in block.parcels]
+    def _build_treatment(self):
+        treatment = self.app_state.get_active_treatment()
+        parcels = [self._plot_card(plot) for plot in treatment.parcels]
         if not parcels:
-            parcels = [self._empty_card("Nenhuma parcela neste bloco.")]
-        ready = self._block_ready_readings(block)
-        self.block_process_button.disabled = not ready
+            parcels = [self._empty_card("Nenhuma parcela neste tratamento.")]
         return self._screen(
             [
-                self._header(block.name, block.description or "Bloco do experimento"),
-                self._block_result_card(block),
+                self._header(treatment.name, treatment.description or "Tratamento do experimento"),
+                self._treatment_result_card(treatment),
                 self._primary_action(
                     ft.Icons.ADD_ROUNDED,
                     "Adicionar parcela",
                     "Crie uma parcela para receber leituras.",
                     self._open_add_plot_dialog,
                 ),
-                self.block_process_button,
-                self.progress_bar,
-                self._feedback_line(),
                 ft.Text("Parcelas", size=20, weight=ft.FontWeight.W_700, color=TEXT),
                 *parcels,
             ]
@@ -198,7 +197,7 @@ class SamplingView:
             readings = [self._empty_card("Nenhuma leitura registrada nesta parcela.")]
         return self._screen(
             [
-                self._header(plot.name, plot.description or "Parcela do bloco"),
+                self._header(plot.name, plot.description or "Parcela do tratamento"),
                 self._summary_metrics(plot.average_healthy_pct(), plot.average_severity_pct(), len(plot.processed_results())),
                 self._primary_action(
                     ft.Icons.ADD_ROUNDED,
@@ -255,7 +254,7 @@ class SamplingView:
         if not is_test:
             controls.append(
                 ft.Text(
-                    "O processamento desta leitura é iniciado pelo botão Processar bloco.",
+                    "O processamento desta leitura é iniciado pelo botão Processar experimento.",
                     color=MUTED,
                     size=13,
                     text_align=ft.TextAlign.CENTER,
@@ -325,12 +324,24 @@ class SamplingView:
             ),
         )
 
-    def _list_card(self, icon, title, subtitle, details, on_click, badge=None):
+    def _list_card(self, icon, title, subtitle, details, on_click, badge=None, on_delete=None):
         detail_controls = [ft.Text(subtitle, color=MUTED, size=13)]
         if details:
             detail_controls.append(ft.Text(details, color="#CBD5E1", size=12))
         if badge:
             detail_controls.append(self._badge(badge[0], badge[1]))
+        trailing_controls = []
+        if on_delete:
+            trailing_controls.append(
+                ft.IconButton(
+                    icon=ft.Icons.DELETE_OUTLINE_ROUNDED,
+                    icon_color="#FCA5A5",
+                    icon_size=21,
+                    tooltip="Excluir",
+                    on_click=on_delete,
+                )
+            )
+        trailing_controls.append(ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color="#CBD5E1"))
         return ft.Container(
             bgcolor=SURFACE,
             border_radius=20,
@@ -352,35 +363,37 @@ class SamplingView:
                         spacing=4,
                         controls=[ft.Text(title, color=TEXT, size=18, weight=ft.FontWeight.W_700), *detail_controls],
                     ),
-                    ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color="#CBD5E1"),
+                    *trailing_controls,
                 ],
             ),
         )
 
     def _experiment_card(self, experiment):
-        blocks, parcels, readings = experiment.counts()
+        treatments, parcels, readings = experiment.counts()
         status = "Em andamento"
         return self._list_card(
             ft.Icons.SCIENCE_ROUNDED,
             experiment.name,
             f"{experiment.culture} • {experiment.start_date}",
-            f"{blocks} blocos • {parcels} parcelas • {readings} leituras",
+            f"{treatments} tratamentos • {parcels} parcelas • {readings} leituras",
             lambda _, item_id=experiment.id: self._open_experiment(item_id),
             (status, "#166534"),
+            lambda _, item=experiment: self._confirm_delete_experiment(item),
         )
 
-    def _block_card(self, block):
-        readings = [reading for plot in block.parcels for reading in plot.readings]
+    def _treatment_card(self, treatment):
+        readings = [reading for plot in treatment.parcels for reading in plot.readings]
         processed = sum(reading.processed for reading in readings)
         details = f"{processed} leituras processadas"
-        if block.processed_results():
-            details += f" • Sadia {block.average_healthy_pct():.2f}% • Severidade {block.average_severity_pct():.2f}%"
+        if treatment.processed_results():
+            details += f" • Sadia {treatment.average_healthy_pct():.2f}% • Severidade {treatment.average_severity_pct():.2f}%"
         return self._list_card(
             ft.Icons.INVENTORY_2_ROUNDED,
-            block.name,
-            f"{len(block.parcels)} parcelas • {len(readings)} leituras",
+            treatment.name,
+            f"{len(treatment.parcels)} parcelas • {len(readings)} leituras",
             details,
-            lambda _, item_id=block.id: self._open_block(item_id),
+            lambda _, item_id=treatment.id: self._open_treatment(item_id),
+            on_delete=lambda _, item=treatment: self._confirm_delete_treatment(item),
         )
 
     def _plot_card(self, plot):
@@ -392,6 +405,7 @@ class SamplingView:
             f"{len(plot.readings)} leituras",
             details,
             lambda _, item_id=plot.id: self._open_plot(item_id),
+            on_delete=lambda _, item=plot: self._confirm_delete_plot(item),
         )
 
     def _reading_card(self, reading):
@@ -407,10 +421,11 @@ class SamplingView:
         return self._list_card(
             ft.Icons.CALENDAR_MONTH_ROUNDED,
             f"Leitura • {reading.date}",
-            reading.description or "Sem descrição",
+            reading.damage_mode_label,
             details,
             lambda _, item_id=reading.id: self._open_reading(item_id),
             badge,
+            lambda _, item=reading: self._confirm_delete_reading(item),
         )
 
     def _badge(self, text, color):
@@ -429,7 +444,7 @@ class SamplingView:
             content=ft.Text(text, color="#CBD5E1", text_align=ft.TextAlign.CENTER),
         )
 
-    def _block_result_card(self, block):
+    def _treatment_result_card(self, treatment):
         return ft.Container(
             bgcolor=SURFACE_DARK,
             border_radius=20,
@@ -437,11 +452,11 @@ class SamplingView:
             content=ft.Column(
                 spacing=12,
                 controls=[
-                    ft.Text("Resultado do bloco", color=TEXT, size=18, weight=ft.FontWeight.W_700),
+                    ft.Text("Resultado do tratamento", color=TEXT, size=18, weight=ft.FontWeight.W_700),
                     self._summary_metrics(
-                        block.average_healthy_pct(),
-                        block.average_severity_pct(),
-                        len(block.processed_results()),
+                        treatment.average_healthy_pct(),
+                        treatment.average_severity_pct(),
+                        len(treatment.processed_results()),
                     ),
                 ],
             ),
@@ -490,7 +505,7 @@ class SamplingView:
         elif remaining:
             self.feedback_text.value = f"Faltam {remaining} {'imagem' if remaining == 1 else 'imagens'} para completar a leitura."
         else:
-            self.feedback_text.value = "Leitura completa e pronta para o processamento do bloco."
+            self.feedback_text.value = "Leitura completa e pronta para o processamento do experimento."
         self.avg_healthy_text.value = f"{reading.average_healthy_pct():.2f}%" if reading.all_results() else "--"
         self.avg_severity_text.value = f"{reading.average_severity_pct():.2f}%" if reading.all_results() else "--"
         if current is None:
@@ -662,18 +677,18 @@ class SamplingView:
 
         self._show_form_dialog("Novo experimento", list(fields.values()), create)
 
-    def _open_add_block_dialog(self, _):
-        name = ft.TextField(label="Nome do bloco", autofocus=True)
+    def _open_add_treatment_dialog(self, _):
+        name = ft.TextField(label="Nome do tratamento", autofocus=True)
         description = ft.TextField(label="Descrição (opcional)", multiline=True, min_lines=2, max_lines=3)
 
         def create(feedback):
             if not (name.value or "").strip():
-                feedback.value = "Informe o nome do bloco."
+                feedback.value = "Informe o nome do tratamento."
                 return False
-            self.app_state.add_block(name.value.strip(), (description.value or "").strip())
+            self.app_state.add_treatment(name.value.strip(), (description.value or "").strip())
             return True
 
-        self._show_form_dialog("Novo bloco", [name, description], create)
+        self._show_form_dialog("Novo tratamento", [name, description], create)
 
     def _open_add_plot_dialog(self, _):
         name = ft.TextField(label="Nome da parcela", autofocus=True)
@@ -691,6 +706,7 @@ class SamplingView:
     def _open_add_reading_dialog(self, _):
         reading_date = ft.TextField(label="Data da leitura", value=date.today().strftime("%d/%m/%Y"), autofocus=True)
         target = ft.TextField(label="Quantidade de imagens", value="3", keyboard_type=ft.KeyboardType.NUMBER)
+        damage_mode = self._damage_mode_dropdown()
         description = ft.TextField(label="Descrição (opcional)", multiline=True, min_lines=2, max_lines=3)
 
         def create(feedback):
@@ -705,11 +721,30 @@ class SamplingView:
             if target_images <= 0:
                 feedback.value = "A quantidade de imagens deve ser maior que zero."
                 return False
-            reading = self.app_state.add_reading(formatted_date, target_images, (description.value or "").strip())
+            if not damage_mode.value:
+                feedback.value = "Selecione o tipo de dano que será analisado."
+                return False
+            reading = self.app_state.add_reading(
+                formatted_date,
+                target_images,
+                (description.value or "").strip(),
+                damage_mode.value,
+            )
             self.app_state.open_reading(reading.id)
             return True
 
-        self._show_form_dialog("Nova leitura", [reading_date, target, description], create)
+        self._show_form_dialog("Nova leitura", [reading_date, target, damage_mode, description], create)
+
+    def _damage_mode_dropdown(self):
+        return ft.Dropdown(
+            label="Tipo de dano",
+            hint_text="Selecione uma opção",
+            options=[ft.dropdown.Option(value, label) for value, label in DAMAGE_MODE_LABELS.items()],
+            filled=True,
+            fill_color=SURFACE_DARK,
+            border_color="#475569",
+            color="white",
+        )
 
     def _show_form_dialog(self, title, fields, create):
         feedback = ft.Text("", color="#FCA5A5")
@@ -731,6 +766,69 @@ class SamplingView:
             title=ft.Text(title, color="white"),
             content=ft.Column(tight=True, scroll=ft.ScrollMode.AUTO, controls=[*fields, feedback]),
             actions=[ft.TextButton("Cancelar", on_click=close), ft.FilledButton("Criar", on_click=submit)],
+        )
+        self.page.show_dialog(dialog)
+
+    def _confirm_delete_experiment(self, experiment):
+        self._show_delete_dialog(
+            item_type="experimento",
+            item_name=experiment.name,
+            nested_items="tratamentos, parcelas, leituras e resultados",
+            delete_action=lambda: self.app_state.delete_experiment(experiment.id),
+        )
+
+    def _confirm_delete_treatment(self, treatment):
+        self._show_delete_dialog(
+            item_type="tratamento",
+            item_name=treatment.name,
+            nested_items="parcelas, leituras e resultados",
+            delete_action=lambda: self.app_state.delete_treatment(treatment.id),
+        )
+
+    def _confirm_delete_plot(self, plot):
+        self._show_delete_dialog(
+            item_type="parcela",
+            item_name=plot.name,
+            nested_items="leituras e resultados",
+            delete_action=lambda: self.app_state.delete_plot(plot.id),
+        )
+
+    def _confirm_delete_reading(self, reading):
+        self._show_delete_dialog(
+            item_type="leitura",
+            item_name=reading.date,
+            nested_items="imagens temporárias e resultados",
+            delete_action=lambda: self.app_state.delete_reading(reading.id),
+        )
+
+    def _show_delete_dialog(self, item_type, item_name, nested_items, delete_action):
+        def close(_=None):
+            self.page.pop_dialog()
+            self.page.update()
+
+        def confirm(_):
+            delete_action()
+            self.page.pop_dialog()
+            self._request_refresh()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            bgcolor=SURFACE,
+            title=ft.Text(f"Excluir {item_type}?", color="white"),
+            content=ft.Text(
+                f'A exclusão de "{item_name}" também removerá {nested_items}. Esta ação não pode ser desfeita.',
+                color="#CBD5E1",
+            ),
+            actions=[
+                ft.TextButton("Cancelar", on_click=close),
+                ft.FilledButton(
+                    "Excluir",
+                    icon=ft.Icons.DELETE_ROUNDED,
+                    bgcolor="#B91C1C",
+                    color="white",
+                    on_click=confirm,
+                ),
+            ],
         )
         self.page.show_dialog(dialog)
 
@@ -863,36 +961,35 @@ class SamplingView:
         await self._process_reading(reading, persist=False, label="teste")
         self._request_refresh()
 
-    async def _process_block(self, _):
-        block = self.app_state.get_active_block()
-        if block is None:
+    async def _process_experiment(self, _):
+        experiment = self.app_state.get_active_experiment()
+        if experiment is None:
             return
-        readings = self._block_ready_readings(block)
-        if not readings:
+        pending_items = self._experiment_ready_readings(experiment)
+        if not pending_items:
             self._set_feedback("Não há leituras completas aguardando processamento.")
             return
-        total_images = sum(len(reading.images) for reading in readings)
+        total_images = sum(len(reading.images) for _, _, reading in pending_items)
         completed = 0
         self.progress_bar.visible = True
         self.progress_bar.value = 0
-        self.block_process_button.disabled = True
+        self.experiment_process_button.disabled = True
         try:
-            for reading in readings:
-                plot = next(plot for plot in block.parcels if reading in plot.readings)
-                self.feedback_text.value = f"Processando {plot.name} • {reading.date}"
+            for treatment, plot, reading in pending_items:
+                self.feedback_text.value = f"Processando {treatment.name} • {plot.name} • {reading.date}"
                 self.page.update()
                 for image in reading.images:
-                    await self._process_image(image)
+                    await self._process_image(image, reading.damage_mode)
                     completed += 1
                     self.progress_bar.value = completed / total_images
                     self.feedback_text.value = f"{completed} de {total_images} imagens processadas"
                     self.page.update()
                 reading.finish_processing()
                 self.app_state.persist_experiments()
-            self.feedback_text.value = f"Bloco processado. {len(readings)} leituras atualizadas."
+            self.feedback_text.value = f"Experimento processado. {len(pending_items)} leituras atualizadas."
             self.feedback_text.color = "#86EFAC"
         except Exception as exc:
-            self.feedback_text.value = f"Erro no processamento do bloco: {exc}"
+            self.feedback_text.value = f"Erro no processamento do experimento: {exc}"
             self.feedback_text.color = "#FCA5A5"
         self.progress_bar.visible = False
         self._request_refresh()
@@ -904,7 +1001,7 @@ class SamplingView:
         total = len(reading.images)
         try:
             for index, image in enumerate(reading.images, start=1):
-                await self._process_image(image)
+                await self._process_image(image, reading.damage_mode)
                 self.progress_bar.value = index / total
                 self.feedback_text.value = f"{index} de {total} imagens processadas"
                 self.page.update()
@@ -918,15 +1015,14 @@ class SamplingView:
             self.feedback_text.color = "#FCA5A5"
         self.progress_bar.visible = False
 
-    async def _process_image(self, image):
+    async def _process_image(self, image, damage_mode):
         if image.path is None:
             raise RuntimeError("Imagem temporária não encontrada.")
         result = await asyncio.to_thread(
             self.analysis_service.process_image,
             image_path=Path(image.path),
             confidence=self.app_state.settings.confidence,
-            sensitivity=self.app_state.settings.sensitivity,
-            use_hybrid_threshold=self.app_state.settings.use_hybrid_threshold,
+            damage_mode=damage_mode,
         )
         image.view_sources = result["view_sources"]
         image.healthy_pct = result["healthy_pct"]
@@ -973,16 +1069,24 @@ class SamplingView:
         self._request_refresh()
 
     def _start_unit_test(self, _):
-        self.app_state.start_unit_test()
-        self.view_mode_dropdown.value = "original"
-        self._request_refresh()
+        damage_mode = self._damage_mode_dropdown()
+
+        def create(feedback):
+            if not damage_mode.value:
+                feedback.value = "Selecione o tipo de dano que será analisado."
+                return False
+            self.app_state.start_unit_test(damage_mode.value)
+            self.view_mode_dropdown.value = "original"
+            return True
+
+        self._show_form_dialog("Novo teste unitário", [damage_mode], create)
 
     def _open_experiment(self, item_id):
         self.app_state.open_experiment(item_id)
         self._request_refresh()
 
-    def _open_block(self, item_id):
-        self.app_state.open_block(item_id)
+    def _open_treatment(self, item_id):
+        self.app_state.open_treatment(item_id)
         self._request_refresh()
 
     def _open_plot(self, item_id):
@@ -1012,17 +1116,23 @@ class SamplingView:
     def _start_process_unit_test(self, event):
         self.page.run_task(self._process_unit_test, event)
 
-    def _start_process_block(self, event):
-        self.page.run_task(self._process_block, event)
+    def _start_process_experiment(self, event):
+        self.page.run_task(self._process_experiment, event)
 
-    def _block_ready_readings(self, block):
-        return [reading for plot in block.parcels for reading in plot.readings if reading.is_ready_to_process()]
+    def _experiment_ready_readings(self, experiment):
+        return [
+            (treatment, plot, reading)
+            for treatment in experiment.treatments
+            for plot in treatment.parcels
+            for reading in plot.readings
+            if reading.is_ready_to_process()
+        ]
 
     def _reading_subtitle(self, reading):
         if reading.validation_mode:
-            return "Validação rápida do modelo"
+            return f"Validação rápida • {reading.damage_mode_label}"
         status = "Processada" if reading.processed else f"alvo: {reading.target_images} imagens"
-        return f"{reading.date} • {status}"
+        return f"{reading.date} • {status} • {reading.damage_mode_label}"
 
     def _loaded_images_label(self, count, reading):
         return f"{count} {'imagem carregada' if count == 1 else 'imagens carregadas'}." if reading.validation_mode else f"{count}/{reading.target_images} imagens carregadas."
@@ -1061,7 +1171,7 @@ class SamplingView:
         body_width = self._body_width()
         viewer_size = self._viewer_size()
         self.process_button.width = body_width
-        self.block_process_button.width = body_width
+        self.experiment_process_button.width = body_width
         self.view_mode_dropdown.width = max(MIN_VIEWER_SIZE, body_width - CARD_PADDING * 2)
         for control in (self.segmented_image, self.placeholder, self.viewer_stack):
             control.width = viewer_size

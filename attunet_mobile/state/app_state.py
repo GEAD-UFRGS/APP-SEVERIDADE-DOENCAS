@@ -2,7 +2,15 @@ import json
 import uuid
 from dataclasses import dataclass, field
 
-from config import DEFAULT_SETTINGS, EXPERIMENTS_PATH, PARCELS_PATH, SETTINGS_PATH, ensure_app_files
+from config import (
+    DAMAGE_MODE_LABELS,
+    DEFAULT_DAMAGE_MODE,
+    DEFAULT_SETTINGS,
+    EXPERIMENTS_PATH,
+    PARCELS_PATH,
+    SETTINGS_PATH,
+    ensure_app_files,
+)
 
 
 def _new_id():
@@ -43,6 +51,7 @@ class Reading:
     date: str
     target_images: int
     description: str = ""
+    damage_mode: str = DEFAULT_DAMAGE_MODE
     images: list[ParcelImage] = field(default_factory=list)
     result_images: list[dict] = field(default_factory=list)
     current_index: int = 0
@@ -56,6 +65,10 @@ class Reading:
     @property
     def culture(self):
         return "Validação"
+
+    @property
+    def damage_mode_label(self):
+        return DAMAGE_MODE_LABELS.get(self.damage_mode, DAMAGE_MODE_LABELS[DEFAULT_DAMAGE_MODE])
 
     def current_image(self):
         if not self.images:
@@ -128,6 +141,7 @@ class Reading:
             "date": self.date,
             "target_images": self.target_images,
             "description": self.description,
+            "damage_mode": self.damage_mode,
             "processed": self.processed,
             "result_images": self.result_images,
         }
@@ -140,6 +154,7 @@ class Reading:
             date=data.get("date", ""),
             target_images=max(int(data.get("target_images", 0)), 0),
             description=data.get("description", ""),
+            damage_mode=data.get("damage_mode", DEFAULT_DAMAGE_MODE),
             result_images=[
                 {
                     "healthy_pct": float(item.get("healthy_pct", 0.0)),
@@ -189,7 +204,7 @@ class Parcel:
 
 
 @dataclass
-class Block:
+class Treatment:
     id: str
     name: str
     description: str = ""
@@ -218,7 +233,7 @@ class Block:
     def from_dict(cls, data):
         return cls(
             id=data.get("id", _new_id()),
-            name=data.get("name", "Bloco"),
+            name=data.get("name", "Tratamento"),
             description=data.get("description", ""),
             parcels=[Parcel.from_dict(item) for item in data.get("parcels", []) if isinstance(item, dict)],
         )
@@ -231,12 +246,12 @@ class Experiment:
     start_date: str
     culture: str
     description: str = ""
-    blocks: list[Block] = field(default_factory=list)
+    treatments: list[Treatment] = field(default_factory=list)
 
     def counts(self):
-        parcels = sum(len(block.parcels) for block in self.blocks)
-        readings = sum(len(parcel.readings) for block in self.blocks for parcel in block.parcels)
-        return len(self.blocks), parcels, readings
+        parcels = sum(len(treatment.parcels) for treatment in self.treatments)
+        readings = sum(len(parcel.readings) for treatment in self.treatments for parcel in treatment.parcels)
+        return len(self.treatments), parcels, readings
 
     def to_dict(self):
         return {
@@ -245,26 +260,25 @@ class Experiment:
             "start_date": self.start_date,
             "culture": self.culture,
             "description": self.description,
-            "blocks": [block.to_dict() for block in self.blocks],
+            "treatments": [treatment.to_dict() for treatment in self.treatments],
         }
 
     @classmethod
     def from_dict(cls, data):
+        treatments = data.get("treatments", data.get("blocks", []))
         return cls(
             id=data.get("id", _new_id()),
             name=data.get("name", "Experimento"),
             start_date=data.get("start_date", ""),
             culture=data.get("culture", "Trigo"),
             description=data.get("description", ""),
-            blocks=[Block.from_dict(item) for item in data.get("blocks", []) if isinstance(item, dict)],
+            treatments=[Treatment.from_dict(item) for item in treatments if isinstance(item, dict)],
         )
 
 
 @dataclass
 class AppSettings:
     confidence: float = 0.6
-    sensitivity: float = 0.5
-    use_hybrid_threshold: bool = False
 
 
 @dataclass
@@ -273,7 +287,7 @@ class AppState:
     experiments: list[Experiment] = field(default_factory=list)
     active_level: str = "home"
     active_experiment_id: str | None = None
-    active_block_id: str | None = None
+    active_treatment_id: str | None = None
     active_plot_id: str | None = None
     active_reading_id: str | None = None
     unit_test: Reading | None = None
@@ -295,8 +309,6 @@ class AppState:
         state = cls(
             settings=AppSettings(
                 confidence=float(settings_data.get("confidence", 0.6)),
-                sensitivity=float(settings_data.get("sensitivity", 0.5)),
-                use_hybrid_threshold=bool(settings_data.get("use_hybrid_threshold", False)),
             ),
             experiments=experiments,
         )
@@ -340,7 +352,7 @@ class AppState:
                 name="Amostragens anteriores",
                 start_date=start_date,
                 culture=culture or "Trigo",
-                blocks=[Block(id=_new_id(), name="Bloco importado", parcels=plots)],
+                treatments=[Treatment(id=_new_id(), name="Tratamento importado", parcels=plots)],
             )
         ]
 
@@ -350,8 +362,6 @@ class AppState:
             SETTINGS_PATH,
             {
                 "confidence": round(float(self.settings.confidence), 4),
-                "sensitivity": round(float(self.settings.sensitivity), 4),
-                "use_hybrid_threshold": bool(self.settings.use_hybrid_threshold),
             },
         )
 
@@ -365,43 +375,103 @@ class AppState:
         self.persist_experiments()
         return experiment
 
-    def add_block(self, name, description=""):
+    def add_treatment(self, name, description=""):
         experiment = self.get_active_experiment()
         if experiment is None:
             return None
-        block = Block(_new_id(), name, description)
-        experiment.blocks.append(block)
+        treatment = Treatment(_new_id(), name, description)
+        experiment.treatments.append(treatment)
         self.persist_experiments()
-        return block
+        return treatment
 
     def add_plot(self, name, description=""):
-        block = self.get_active_block()
-        if block is None:
+        treatment = self.get_active_treatment()
+        if treatment is None:
             return None
         plot = Parcel(_new_id(), name, description)
-        block.parcels.append(plot)
+        treatment.parcels.append(plot)
         self.persist_experiments()
         return plot
 
-    def add_reading(self, reading_date, target_images, description=""):
+    def add_reading(self, reading_date, target_images, description="", damage_mode=DEFAULT_DAMAGE_MODE):
         plot = self.get_active_plot()
         if plot is None:
             return None
-        reading = Reading(_new_id(), reading_date, target_images, description)
+        selected_mode = damage_mode if damage_mode in DAMAGE_MODE_LABELS else DEFAULT_DAMAGE_MODE
+        reading = Reading(_new_id(), reading_date, target_images, description, selected_mode)
         plot.readings.append(reading)
         self.persist_experiments()
         return reading
 
+    def delete_experiment(self, item_id):
+        original_count = len(self.experiments)
+        self.experiments = [item for item in self.experiments if item.id != item_id]
+        if len(self.experiments) == original_count:
+            return False
+        if self.active_experiment_id == item_id:
+            self.active_experiment_id = None
+            self.active_treatment_id = None
+            self.active_plot_id = None
+            self.active_reading_id = None
+            self.active_level = "home"
+        self.persist_experiments()
+        return True
+
+    def delete_treatment(self, item_id):
+        experiment = self.get_active_experiment()
+        if experiment is None:
+            return False
+        original_count = len(experiment.treatments)
+        experiment.treatments = [item for item in experiment.treatments if item.id != item_id]
+        if len(experiment.treatments) == original_count:
+            return False
+        if self.active_treatment_id == item_id:
+            self.active_treatment_id = None
+            self.active_plot_id = None
+            self.active_reading_id = None
+            self.active_level = "experiment"
+        self.persist_experiments()
+        return True
+
+    def delete_plot(self, item_id):
+        treatment = self.get_active_treatment()
+        if treatment is None:
+            return False
+        original_count = len(treatment.parcels)
+        treatment.parcels = [item for item in treatment.parcels if item.id != item_id]
+        if len(treatment.parcels) == original_count:
+            return False
+        if self.active_plot_id == item_id:
+            self.active_plot_id = None
+            self.active_reading_id = None
+            self.active_level = "treatment"
+        self.persist_experiments()
+        return True
+
+    def delete_reading(self, item_id):
+        plot = self.get_active_plot()
+        if plot is None:
+            return False
+        original_count = len(plot.readings)
+        plot.readings = [item for item in plot.readings if item.id != item_id]
+        if len(plot.readings) == original_count:
+            return False
+        if self.active_reading_id == item_id:
+            self.active_reading_id = None
+            self.active_level = "plot"
+        self.persist_experiments()
+        return True
+
     def get_active_experiment(self):
         return next((item for item in self.experiments if item.id == self.active_experiment_id), None)
 
-    def get_active_block(self):
+    def get_active_treatment(self):
         experiment = self.get_active_experiment()
-        return next((item for item in experiment.blocks if item.id == self.active_block_id), None) if experiment else None
+        return next((item for item in experiment.treatments if item.id == self.active_treatment_id), None) if experiment else None
 
     def get_active_plot(self):
-        block = self.get_active_block()
-        return next((item for item in block.parcels if item.id == self.active_plot_id), None) if block else None
+        treatment = self.get_active_treatment()
+        return next((item for item in treatment.parcels if item.id == self.active_plot_id), None) if treatment else None
 
     def get_active_reading(self):
         plot = self.get_active_plot()
@@ -414,9 +484,9 @@ class AppState:
         self.active_experiment_id = item_id
         self.active_level = "experiment"
 
-    def open_block(self, item_id):
-        self.active_block_id = item_id
-        self.active_level = "block"
+    def open_treatment(self, item_id):
+        self.active_treatment_id = item_id
+        self.active_level = "treatment"
 
     def open_plot(self, item_id):
         self.active_plot_id = item_id
@@ -426,12 +496,13 @@ class AppState:
         self.active_reading_id = item_id
         self.active_level = "reading"
 
-    def start_unit_test(self):
-        self.unit_test = Reading(_new_id(), "", 0, validation_mode=True)
+    def start_unit_test(self, damage_mode=DEFAULT_DAMAGE_MODE):
+        selected_mode = damage_mode if damage_mode in DAMAGE_MODE_LABELS else DEFAULT_DAMAGE_MODE
+        self.unit_test = Reading(_new_id(), "", 0, damage_mode=selected_mode, validation_mode=True)
         self.active_level = "test"
 
     def navigate_back(self):
-        levels = {"experiment": "home", "block": "experiment", "plot": "block", "reading": "plot", "test": "home"}
+        levels = {"experiment": "home", "treatment": "experiment", "plot": "treatment", "reading": "plot", "test": "home"}
         previous = self.active_level
         self.active_level = levels.get(previous, "home")
         if previous == "test":
