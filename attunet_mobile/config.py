@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-APP_TITLE = "ATTUNet Mobile"
+APP_TITLE = "SevSearch5_1YOLO"
 WEB_UPLOAD_SECRET = "attunet-mobile-local-upload-key"
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_DIR.parent
